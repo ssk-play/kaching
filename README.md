@@ -15,18 +15,6 @@ USD 4.99 → KRW 5,020 net
 GPA.1234-5678-9012-34567
 ```
 
-## Install
-
-1. `chrome://extensions` → **Developer mode** → **Load unpacked** → `extension/`
-2. Be signed in to Play Console in this browser
-3. Click the toolbar icon, paste your Telegram bot token and Console URL, **Save**
-
-Create the bot with `/newbot` in [@BotFather](https://t.me/BotFather). Send it any
-message, then press **Find chat ID** and the rest fills itself in.
-
-The first run records what is already there without notifying. Only new orders
-are announced after that.
-
 ## Settings
 
 | Setting | Default | |
@@ -41,6 +29,9 @@ are announced after that.
 | Check every | 10 min | Only runs while Chrome is open |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |
+
+The first run records what is already there without notifying; only new orders
+are announced after that.
 
 ## How it works
 
