@@ -3,7 +3,7 @@
     "message": "카칭 — Play 주문 알림"
   },
   "extDesc": {
-    "message": "Google Play 개발자 계정에 새 주문이나 환불이 생기면 텔레그램으로 알립니다."
+    "message": "Google Play 새 주문과 환불을 텔레그램으로. 서버도, 계정도, SDK도 필요 없습니다."
   },
   "optTitle": {
     "message": "카칭 설정"

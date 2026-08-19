@@ -3,7 +3,7 @@
     "message": "Kaching — Play Order Alerts"
   },
   "extDesc": {
-    "message": "Sends a Telegram message when your Google Play developer account receives a new order or refund."
+    "message": "New Google Play orders and refunds, pushed to Telegram. No server, no account, no SDK."
   },
   "optTitle": {
     "message": "Kaching settings"

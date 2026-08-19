@@ -9,7 +9,10 @@ receives a new order or a refund.
 
 ## Short description (132 char max)
 
-> Get a Telegram message the moment your Google Play account takes a new order or a refund.
+This is the manifest `description`, not a dashboard field — changing it means
+rebuilding the package.
+
+> New Google Play orders and refunds, pushed to Telegram. No server, no account, no SDK.
 
 ## Detailed description
 
