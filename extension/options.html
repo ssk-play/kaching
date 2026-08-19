@@ -1,0 +1,135 @@
+<!-- Rendered inside a tab (options_ui.open_in_tab), so it owns the whole page. -->
+<meta charset="utf-8" />
+<title>Kaching</title>
+<style>
+  :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 15%, transparent); }
+  body {
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+    max-width: 38rem; margin: 2rem auto 5rem; padding: 0 1.25rem;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; display: flex; align-items: center; gap: .5rem; }
+  h1 img { width: 28px; height: 28px; }
+  h2 {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; opacity: .6;
+    margin: 2.25rem 0 .75rem; padding-bottom: .4rem; border-bottom: 1px solid var(--line);
+  }
+  label.field { display: block; margin: 1rem 0 .25rem; font-weight: 600; }
+  input[type=text], input[type=password], input[type=url], input[type=number] {
+    width: 100%; padding: .5rem; font: inherit; box-sizing: border-box;
+    border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit;
+  }
+  .check { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; font-weight: 600; }
+  .check input { width: auto; }
+  .hint { font-size: .85em; opacity: .65; margin-top: .3rem; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 2rem; }
+  button {
+    padding: .5rem 1rem; font: inherit; cursor: pointer; border-radius: 6px;
+    border: 1px solid var(--line); background: transparent; color: inherit;
+  }
+  button#save { font-weight: 600; border-color: currentColor; }
+  #log { margin-top: 1rem; min-height: 1.6em; white-space: pre-wrap; font-size: .92em; }
+  .ok { color: #2e7d32; } .err { color: #c62828; }
+  #setup { padding: .75rem 1rem; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
+  .logbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
+  .logbar .hint { margin-top: 0; }
+  .logbar button { padding: .3rem .7rem; font-size: .85em; }
+  #logview { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; max-height: 20rem; overflow-y: auto; }
+  #logview li { display: grid; grid-template-columns: auto 4.5rem 1fr; gap: .6rem; align-items: baseline;
+    padding: .45rem .75rem; border-bottom: 1px solid var(--line); font-size: .9em; }
+  #logview li:last-child { border-bottom: 0; }
+  #logview .dot { width: .5rem; height: .5rem; border-radius: 50%; align-self: center; background: currentColor; }
+  #logview .at { opacity: .55; font-variant-numeric: tabular-nums; font-size: .92em; }
+  #logview .info { color: inherit; } #logview .info .dot { background: #9e9e9e; }
+  #logview .order .dot { background: #1a73e8; }
+  #logview .warn .dot { background: #f09000; }
+  #logview .error { color: #c62828; } #logview .error .dot { background: #c62828; }
+  #logview .empty { display: block; padding: .9rem .75rem; opacity: .6; }
+  #preview {
+    white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .85em; padding: .75rem; border: 1px solid var(--line); border-radius: 8px;
+    margin-top: .75rem; opacity: .85;
+  }
+</style>
+
+<h1><img src="icons/icon48.png" alt="" /><span data-i18n="optTitle"></span></h1>
+
+<div id="setup" hidden data-i18n="msgNeedSetup"></div>
+
+<h2 data-i18n="secDelivery"></h2>
+
+<label class="field" for="botToken" data-i18n="lblBotToken"></label>
+<input id="botToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456:ABC-DEF…" />
+<div class="hint" data-i18n="hintBotToken"></div>
+
+<label class="field" for="chatId" data-i18n="lblChatId"></label>
+<input id="chatId" type="text" autocomplete="off" spellcheck="false" placeholder="123456789" />
+<div class="hint" data-i18n="hintChatId"></div>
+
+<label class="field" for="senderName" data-i18n="lblSender"></label>
+<input id="senderName" type="text" autocomplete="off" />
+<div class="hint" data-i18n="hintSender"></div>
+
+<h2 data-i18n="secSource"></h2>
+
+<label class="field" for="consoleUrl" data-i18n="lblConsoleUrl"></label>
+<input id="consoleUrl" type="url" autocomplete="off" spellcheck="false"
+       placeholder="https://play.google.com/console/u/0/developers/1234567890/orders" />
+<div class="hint" data-i18n="hintConsoleUrl"></div>
+
+<h2 data-i18n="secFilter"></h2>
+
+<label class="field" data-i18n="lblStates"></label>
+<label class="check"><input id="notifyCharged" type="checkbox" /><span data-i18n="lblStateCharged"></span></label>
+<label class="check"><input id="notifyRefunded" type="checkbox" /><span data-i18n="lblStateRefunded"></span></label>
+
+<label class="field" for="packages" data-i18n="lblPackages"></label>
+<input id="packages" type="text" autocomplete="off" spellcheck="false" />
+<div class="hint" data-i18n="hintPackages"></div>
+
+<label class="field" for="minPayout" data-i18n="lblMinPayout"></label>
+<input id="minPayout" type="number" min="0" step="1" />
+<div class="hint" data-i18n="hintMinPayout"></div>
+
+<h2 data-i18n="secDisplay"></h2>
+
+<label class="check"><input id="showLocalTime" type="checkbox" /><span data-i18n="lblShowLocal"></span></label>
+<label class="check"><input id="showUtcTime" type="checkbox" /><span data-i18n="lblShowUtc"></span></label>
+<div class="hint" data-i18n="hintTimes"></div>
+<label class="check"><input id="showBreakdown" type="checkbox" /><span data-i18n="lblBreakdown"></span></label>
+<div class="hint" data-i18n="hintBreakdown"></div>
+<div id="preview"></div>
+
+<h2 data-i18n="secSchedule"></h2>
+
+<label class="field" for="intervalMinutes" data-i18n="lblInterval"></label>
+<input id="intervalMinutes" type="number" min="1" max="120" />
+<div class="hint" data-i18n="hintInterval"></div>
+
+<label class="field" for="days" data-i18n="lblDays"></label>
+<input id="days" type="number" min="1" max="30" />
+<div class="hint" data-i18n="hintDays"></div>
+
+<label class="check" style="margin-top:1rem">
+  <input id="verbose" type="checkbox" /><span data-i18n="lblVerbose"></span>
+</label>
+<div class="hint" data-i18n="hintVerbose"></div>
+
+<div class="row">
+  <button id="save" data-i18n="btnSave"></button>
+  <button id="findChat" data-i18n="btnFindChat"></button>
+  <button id="test" data-i18n="btnTest"></button>
+  <button id="checkNow" data-i18n="btnCheckNow"></button>
+  <button id="showStatus" data-i18n="btnStatus"></button>
+  <button id="reset" data-i18n="btnReset"></button>
+</div>
+
+<div id="log"></div>
+
+<h2 data-i18n="secLog"></h2>
+<div class="logbar">
+  <span class="hint" id="logHint"></span>
+  <button id="clearLog" data-i18n="btnClearLog"></button>
+</div>
+<ol id="logview"></ol>
+
+<script type="module" src="options.js"></script>

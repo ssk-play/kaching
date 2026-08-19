@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "origin", "operation": "set", "value": "https://play.google.com" },
+        { "header": "referer", "operation": "set", "value": "https://play.google.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||playconsolemonetization-pa.clients6.google.com/",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]

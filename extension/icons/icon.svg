@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b9bf8"/>
+      <stop offset="1" stop-color="#1a73e8"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <!-- A message carrying money: the two things the extension actually joins.
+       Scaled to 0.85 about the centre so the bubble has room to breathe at 128px
+       without losing the strokes that keep the $ readable at 16px. -->
+  <g fill="#fff" transform="translate(32 32) scale(0.85) translate(-32 -32)">
+    <path d="M12 12h40a9 9 0 0 1 9 9v18a9 9 0 0 1-9 9H32l-13 10V48h-7a9 9 0 0 1-9-9V21a9 9 0 0 1 9-9z"/>
+    <text x="32" y="40" font-family="Helvetica,Arial,sans-serif" font-size="26" font-weight="bold"
+          text-anchor="middle" fill="#1a73e8">$</text>
+  </g>
+</svg>

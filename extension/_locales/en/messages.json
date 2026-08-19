@@ -1,0 +1,269 @@
+{
+  "extName": {
+    "message": "Kaching — Play Order Alerts"
+  },
+  "extDesc": {
+    "message": "Sends a Telegram message when your Google Play developer account receives a new order or refund."
+  },
+  "optTitle": {
+    "message": "Kaching settings"
+  },
+  "secDelivery": {
+    "message": "Delivery"
+  },
+  "secSource": {
+    "message": "Source"
+  },
+  "secFilter": {
+    "message": "What to notify"
+  },
+  "secDisplay": {
+    "message": "Message format"
+  },
+  "secSchedule": {
+    "message": "Schedule"
+  },
+  "lblBotToken": {
+    "message": "Telegram bot token"
+  },
+  "hintBotToken": {
+    "message": "Create a bot with /newbot in @BotFather and paste the token it gives you."
+  },
+  "lblChatId": {
+    "message": "Chat ID"
+  },
+  "hintChatId": {
+    "message": "Send your bot any message first, then press Find chat ID."
+  },
+  "lblSender": {
+    "message": "Sender label (optional)"
+  },
+  "hintSender": {
+    "message": "Prefixed to every message. Useful when one chat receives alerts from several sources. Leave empty to omit."
+  },
+  "lblConsoleUrl": {
+    "message": "Play Console orders URL"
+  },
+  "hintConsoleUrl": {
+    "message": "Open Play Console → Orders and paste the address. The developer ID is read from it."
+  },
+  "lblStates": {
+    "message": "Order events"
+  },
+  "lblStateCharged": {
+    "message": "New orders"
+  },
+  "lblStateRefunded": {
+    "message": "Refunds"
+  },
+  "lblPackages": {
+    "message": "Only these apps"
+  },
+  "hintPackages": {
+    "message": "Comma-separated package names, e.g. com.example.one, com.example.two. Leave empty for all apps."
+  },
+  "lblMinPayout": {
+    "message": "Minimum payout"
+  },
+  "hintMinPayout": {
+    "message": "Skip orders paying out less than this. Set 1 to hide zero-value test orders. 0 notifies everything."
+  },
+  "lblShowLocal": {
+    "message": "Show time in your local zone"
+  },
+  "lblShowUtc": {
+    "message": "Show time in UTC"
+  },
+  "hintTimes": {
+    "message": "Play records order times in UTC. Turn both on to see them side by side."
+  },
+  "lblInterval": {
+    "message": "Check every (minutes)"
+  },
+  "hintInterval": {
+    "message": "Only runs while Chrome is open, using your signed-in Play Console session."
+  },
+  "lblDays": {
+    "message": "Look back (days)"
+  },
+  "hintDays": {
+    "message": "How far back each check reads. Two days is enough unless Chrome is closed for long stretches."
+  },
+  "lblVerbose": {
+    "message": "Send every check result to Telegram"
+  },
+  "hintVerbose": {
+    "message": "For confirming it is alive. Turn it off once you trust it."
+  },
+  "btnSave": {
+    "message": "Save"
+  },
+  "btnFindChat": {
+    "message": "Find chat ID"
+  },
+  "btnTest": {
+    "message": "Send test"
+  },
+  "btnCheckNow": {
+    "message": "Check now"
+  },
+  "btnReset": {
+    "message": "Reset history"
+  },
+  "btnStatus": {
+    "message": "Show status"
+  },
+  "msgSaved": {
+    "message": "Saved."
+  },
+  "msgNeedToken": {
+    "message": "Enter the bot token first."
+  },
+  "msgBadToken": {
+    "message": "That does not look like a bot token. Paste the whole \"digits:letters\" string from @BotFather."
+  },
+  "msgBadUrl": {
+    "message": "Could not find a developer ID in that URL. It should look like https://play.google.com/console/u/0/developers/1234567890/orders"
+  },
+  "msgSearching": {
+    "message": "Searching…"
+  },
+  "msgNoChat": {
+    "message": "No conversation found.\n1. Open your bot in Telegram and press Start, or send it any message.\n2. Press this button again.\n(Messages older than 24 hours are not returned.)"
+  },
+  "msgChatFilled": {
+    "message": "$1\n\nFilled in the first one. Press Save."
+  },
+  "msgUnauthorized": {
+    "message": "\nThe token was rejected. Check it again in @BotFather → /mybots."
+  },
+  "msgTestSent": {
+    "message": "Sent. Check Telegram."
+  },
+  "msgChecking": {
+    "message": "Checking…"
+  },
+  "msgResetDone": {
+    "message": "History cleared. The next check will re-sync without notifying."
+  },
+  "msgNoBackground": {
+    "message": "The background service did not respond.\nReload the extension in chrome://extensions, then close and reopen this page."
+  },
+  "msgNeedSetup": {
+    "message": "Enter a bot token and chat ID, then press Save."
+  },
+  "statusAlarm": {
+    "message": "Checking every $1 min — next at $2"
+  },
+  "statusNoAlarm": {
+    "message": "No schedule registered. Press Save to set it."
+  },
+  "resultNew": {
+    "message": "$1 new, $2 scanned."
+  },
+  "resultNone": {
+    "message": "Nothing new. $1 scanned."
+  },
+  "resultFirst": {
+    "message": "First sync: recorded $1 orders without notifying."
+  },
+  "notifNewOrder": {
+    "message": "New order"
+  },
+  "notifNewSub": {
+    "message": "New subscription"
+  },
+  "notifRefund": {
+    "message": "Refund"
+  },
+  "tgConnected": {
+    "message": "Kaching is connected."
+  },
+  "tgFirstSync": {
+    "message": "Kaching started. Recorded $1 orders from the last $2 days. Only new ones will be announced from now on."
+  },
+  "tgRecovered": {
+    "message": "Kaching recovered."
+  },
+  "tgMore": {
+    "message": "…and $1 more."
+  },
+  "tgFailHeader": {
+    "message": "Kaching"
+  },
+  "tgFailAuth": {
+    "message": "Your Play Console session expired. Sign in again in this browser."
+  },
+  "tgFailOther": {
+    "message": "Could not read orders: $1"
+  },
+  "tgFailCount": {
+    "message": "($1 checks in a row)"
+  },
+  "statusRecorded": {
+    "message": "$1 orders recorded"
+  },
+  "statusFailures": {
+    "message": "$1 checks failed in a row"
+  },
+  "statusLastSuccess": {
+    "message": "Last success: $1"
+  },
+  "tgFailDelivery": {
+    "message": "Could not deliver to Telegram: $1"
+  },
+  "secLog": {
+    "message": "Activity"
+  },
+  "hintLog": {
+    "message": "The most recent $1 events, newest first. Kept on this machine only."
+  },
+  "btnClearLog": {
+    "message": "Clear log"
+  },
+  "logEmpty": {
+    "message": "Nothing yet. Press Check now."
+  },
+  "logFirstSync": {
+    "message": "First sync — recorded $1 orders without notifying"
+  },
+  "logCheckNew": {
+    "message": "$1 new · $2 scanned"
+  },
+  "logCheckNone": {
+    "message": "No new orders · $1 scanned"
+  },
+  "logOrder": {
+    "message": "Sent: $1 ($2)"
+  },
+  "logRecovered": {
+    "message": "Recovered"
+  },
+  "logAlert": {
+    "message": "Failure alert sent"
+  },
+  "logNeedSetup": {
+    "message": "Waiting for setup"
+  },
+  "logReset": {
+    "message": "History cleared"
+  },
+  "logFailCount": {
+    "message": "failure $1"
+  },
+  "labelNet": {
+    "message": "net"
+  },
+  "labelTax": {
+    "message": "tax"
+  },
+  "labelFee": {
+    "message": "fee $1%"
+  },
+  "lblBreakdown": {
+    "message": "Show tax and fee breakdown"
+  },
+  "hintBreakdown": {
+    "message": "Adds a line with the tax withheld and Google's cut, so the net figure can be checked rather than trusted."
+  }
+}

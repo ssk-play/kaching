@@ -1,0 +1,12 @@
+# Build output
+dist/
+
+# Chrome writes a compiled copy of the declarativeNetRequest ruleset here when
+# the extension is loaded unpacked.
+extension/_metadata/
+
+# git worktrees
+.worktrees/
+
+# macOS
+.DS_Store
