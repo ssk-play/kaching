@@ -29,8 +29,9 @@ phone beyond Telegram itself.
 - Product name and package
 - Buyer country
 - Amount charged and your estimated net — what is left after tax and Google's
-  cut, converted to your own currency, with an optional line showing the
-  breakdown
+  cut. Before Play settles an order that is an estimate in the buyer's currency,
+  and it says so on the line; afterwards it is Play's own figure in yours. An
+  optional line shows the breakdown
 - Order ID
 - Time in your local zone, in UTC, or both
 

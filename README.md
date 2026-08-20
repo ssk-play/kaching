@@ -10,7 +10,7 @@ the Play Console session you are already signed in to.
 🔔 New order
 Premium
 com.example.app · KR
-USD 4.99 → KRW 5,020 net
+USD 4.99 → KRW 5,020 est. net
 2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC
 GPA.1234-5678-9012-34567
 ```
@@ -25,7 +25,7 @@ GPA.1234-5678-9012-34567
 | Only these apps | all | Package names |
 | Minimum payout | 0 | Set 1 to hide zero-value test orders |
 | Local time / UTC | both on | |
-| Tax and fee breakdown | off | Adds a line so the net figure can be checked |
+| Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Check every | 10 min | Only runs while Chrome is open |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |

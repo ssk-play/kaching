@@ -173,6 +173,9 @@
   "notifNewSub": {
     "message": "새 구독"
   },
+  "notifSubRenewal": {
+    "message": "구독 재결제 · 결제 $1회차"
+  },
   "notifRefund": {
     "message": "환불"
   },
@@ -252,7 +255,7 @@
     "message": "$1회째 실패"
   },
   "labelNet": {
-    "message": "순수익"
+    "message": "예상 순수익"
   },
   "labelTax": {
     "message": "세금"
@@ -260,10 +263,13 @@
   "labelFee": {
     "message": "수수료 $1%"
   },
+  "labelNetAssumed": {
+    "message": "예상 순수익 · 수수료 $1% 가정"
+  },
   "lblBreakdown": {
     "message": "세금·수수료 내역 표시"
   },
   "hintBreakdown": {
-    "message": "원천 세금과 구글 수수료를 한 줄로 덧붙입니다. 순수익을 믿는 대신 검산할 수 있습니다."
+    "message": "원천 세금과, 구글이 정산 내역을 내려주면 실제 수수료율까지 한 줄로 덧붙입니다. 예상 순수익을 믿는 대신 검산할 수 있습니다."
   }
 }

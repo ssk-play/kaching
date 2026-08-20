@@ -28,7 +28,7 @@ const load = (f) => import(pathToFileURL(path.join(EXT, f)).href)
 const { DEFAULTS, developerIdFrom, packageList, isConfigured, consoleUrlFor, clampNumber } =
   await load('settings.js')
 const { matches, plan } = await load('filters.js')
-const { times, describe, feePercent } = await load('format.js')
+const { times, describe, feeRate, cycleOf, estimatedNet } = await load('format.js')
 const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('health.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 
@@ -249,30 +249,33 @@ test('trim leaves a short log untouched', () => {
   assert.deepEqual(trim([]), [])
 })
 
-test('feePercent is derived from the order, not assumed', () => {
+test('feeRate is derived from the order, not assumed', () => {
   // Google takes 15% or 30% depending on the programme, so it has to be read
   // back out of the figures rather than hardcoded.
-  assert.equal(feePercent(order()), 15)
-  assert.equal(
-    feePercent(order({ beforeFee: { currency: 'USD', amount: 10 }, net: { currency: 'USD', amount: 7 } })),
-    30,
+  assert.deepEqual(feeRate(order()), { percent: 15, derived: true })
+  assert.deepEqual(
+    feeRate(order({ beforeFee: { currency: 'USD', amount: 10 }, net: { currency: 'USD', amount: 7 } })),
+    { percent: 30, derived: true },
   )
-  assert.equal(feePercent(order({ beforeFee: null })), null)
-  assert.equal(feePercent(order({ beforeFee: { currency: 'KRW', amount: 0 }, net: { currency: 'KRW', amount: 0 } })), null)
+  assert.equal(feeRate(order({ beforeFee: null })), null)
+  assert.equal(feeRate(order({ beforeFee: { currency: 'KRW', amount: 0 }, net: { currency: 'KRW', amount: 0 } })), null)
 })
 
 test('the payout line says what the second figure is', () => {
   // It used to read "USD 4.99 -> KRW 6,500" with nothing naming the second
   // number, which left the net indistinguishable from the charge.
   const line = describe(order(), DEFAULTS).split('\n').find((l) => l.includes('→'))
-  assert.match(line, /USD 4\.99 → KRW 6,500 net$/)
+  assert.match(line, /USD 4\.99 → KRW 6,500 est\. net$/)
 })
 
 test('the breakdown line appears only when asked for', () => {
   const off = describe(order(), { ...DEFAULTS, showBreakdown: false })
   assert.ok(!off.includes('fee 15%'), off)
   const on = describe(order(), { ...DEFAULTS, showBreakdown: true })
-  assert.ok(on.includes('tax USD 0.45 · fee 15% · net USD 3.86'), on)
+  // Tax and rate only: repeating the net would print the same label twice, once
+  // per currency, with nothing saying which was the payout.
+  assert.ok(on.includes('tax USD 0.45 · fee 15%'), on)
+  assert.equal(on.match(/est\. net/g).length, 1, on)
 })
 
 test('an order with no tax figures still renders without an empty line', () => {
@@ -281,4 +284,122 @@ test('an order with no tax figures still renders without an empty line', () => {
     showBreakdown: true,
   })
   assert.ok(!bare.includes('\n\n'), bare)
+})
+
+test('a subscription renewal is not announced as a new subscription', () => {
+  // Play appends "..N" to the base order id from the first renewal onwards, so
+  // the charge number is readable off the id itself.
+  assert.equal(cycleOf(order({ subscription: true })), 1)
+  assert.equal(cycleOf(order({ subscription: true, id: 'GPA.1111-2222-3333-44444..0' })), 2)
+  assert.equal(cycleOf(order({ subscription: true, id: 'GPA.1111-2222-3333-44444..11' })), 13)
+  // A one-time purchase has no cycle at all, suffix or not.
+  assert.equal(cycleOf(order({ id: 'GPA.1111-2222-3333-44444..0' })), null)
+
+  const renewal = describe(order({ subscription: true, id: 'GPA.1111-2222-3333-44444..2' }), DEFAULTS)
+  assert.ok(renewal.startsWith('🔁 Subscription renewal · charge #4'), renewal)
+  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('🔔 New subscription'))
+  // A refund stays a refund whatever charge it undoes.
+  assert.ok(
+    describe(order({ subscription: true, state: 'refunded', id: 'GPA.1..0' }), DEFAULTS)
+      .startsWith('↩️ Refund'),
+  )
+})
+
+test('an unsettled order still shows an estimated net', () => {
+  // Play reports no net or payout until it settles, which used to drop the line
+  // from one-time purchases entirely.
+  const unsettled = { payout: null, net: null }
+  assert.deepEqual(estimatedNet(order(unsettled)), { currency: 'USD', amount: 3.86 })
+  // Without beforeFee the fee applies to the price with tax taken out.
+  assert.deepEqual(estimatedNet(order({ ...unsettled, beforeFee: null })), {
+    currency: 'USD',
+    amount: 3.86,
+  })
+  // Tax that cannot be subtracted would leave a figure the breakdown beside it
+  // contradicts, so nothing is printed rather than something that fails the check.
+  assert.equal(
+    estimatedNet(order({ ...unsettled, beforeFee: null, tax: { currency: 'KRW', amount: 600 } })),
+    null,
+  )
+  // No tax at all means the charge already is the base.
+  assert.deepEqual(estimatedNet(order({ ...unsettled, beforeFee: null, tax: null })), {
+    currency: 'USD',
+    amount: 4.24,
+  })
+  // Nothing to work from stays nothing rather than becoming a zero.
+  assert.equal(estimatedNet(order({ ...unsettled, beforeFee: null, total: null })), null)
+
+  const line = describe(order(unsettled), DEFAULTS).split('\n').find((l) => l.includes('→'))
+  assert.match(line, /USD 4\.99 → USD 3\.86 est\. net · 15% fee assumed$/)
+})
+
+test('an estimated net says on its own line that the rate was assumed', () => {
+  const unsettled = { payout: null, net: null }
+  assert.deepEqual(feeRate(order(unsettled)), { percent: 15, derived: false })
+
+  // The breakdown is off by default, so the disclaimer has to survive DEFAULTS:
+  // a guess that reads like a settled payout is the failure that matters.
+  const plain = describe(order(unsettled), DEFAULTS)
+  assert.ok(plain.includes('USD 3.86 est. net · 15% fee assumed'), plain)
+  // A tax figure is not what makes an estimate an estimate.
+  const noTax = describe(order({ ...unsettled, tax: null, beforeFee: null }), DEFAULTS)
+  assert.ok(noTax.includes('USD 4.24 est. net · 15% fee assumed'), noTax)
+
+  // A settled figure is Play's own and carries no such qualifier.
+  assert.ok(!describe(order(), DEFAULTS).includes('assumed'), describe(order(), DEFAULTS))
+
+  // The breakdown never restates an assumed rate as if it were read off the order.
+  const on = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
+  assert.ok(on.includes('tax USD 0.45'), on)
+  assert.ok(!on.includes('fee 15%'), on)
+})
+test('a refund is never given an estimated net', () => {
+  // Refunds arrive long before Play settles the reversal, so the estimate would
+  // fire on exactly the orders where a positive figure is most misleading.
+  const unsettled = { state: 'refunded', payout: null, net: null }
+  assert.equal(estimatedNet(order(unsettled)), null)
+  assert.equal(feeRate(order(unsettled)), null)
+  const text = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
+  assert.ok(!text.includes('est. net'), text)
+  assert.ok(!text.includes('%'), text)
+  assert.ok(text.includes('USD 4.99'), text)
+  // A settled reversal is no different: Play reporting a positive payout on a
+  // refund does not make it income, and negating it would invent a sign the
+  // response never carried.
+  assert.equal(estimatedNet(order({ state: 'refunded' })), null)
+  // A figure Play itself signs as leaving is worth showing.
+  assert.deepEqual(
+    estimatedNet(order({ state: 'refunded', payout: { currency: 'KRW', amount: -6500 } })),
+    { currency: 'KRW', amount: -6500 },
+  )
+})
+
+test('the breakdown states a derived rate even where no tax was withheld', () => {
+  // With the net no longer repeated here, the rate is the only thing this line
+  // still contributes — gating it on tax hid it in every tax-free jurisdiction.
+  const noTax = describe(
+    order({ tax: null, beforeFee: { currency: 'USD', amount: 4.99 }, net: { currency: 'USD', amount: 3.49 } }),
+    { ...DEFAULTS, showBreakdown: true },
+  )
+  assert.ok(noTax.includes('fee 30%'), noTax)
+  assert.ok(!noTax.includes('tax'), noTax)
+  assert.ok(!noTax.includes('\n\n'), noTax)
+})
+
+test('an estimate is rounded to the currency it is quoted in', () => {
+  // KRW and JPY have no minor unit, so a raw 0.85x lands on an amount that
+  // cannot exist — and Korean developers are the ones who would see it most.
+  const krw = estimatedNet(
+    order({
+      payout: null, net: null, beforeFee: null,
+      total: { currency: 'KRW', amount: 5900 },
+      tax: { currency: 'KRW', amount: 536 },
+    }),
+  )
+  assert.deepEqual(krw, { currency: 'KRW', amount: 4559 })
+  // Currencies that do have cents keep them.
+  assert.deepEqual(estimatedNet(order({ payout: null, net: null })), {
+    currency: 'USD',
+    amount: 3.86,
+  })
 })

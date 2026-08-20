@@ -173,6 +173,9 @@
   "notifNewSub": {
     "message": "New subscription"
   },
+  "notifSubRenewal": {
+    "message": "Subscription renewal · charge #$1"
+  },
   "notifRefund": {
     "message": "Refund"
   },
@@ -252,7 +255,7 @@
     "message": "failure $1"
   },
   "labelNet": {
-    "message": "net"
+    "message": "est. net"
   },
   "labelTax": {
     "message": "tax"
@@ -260,10 +263,13 @@
   "labelFee": {
     "message": "fee $1%"
   },
+  "labelNetAssumed": {
+    "message": "est. net · $1% fee assumed"
+  },
   "lblBreakdown": {
     "message": "Show tax and fee breakdown"
   },
   "hintBreakdown": {
-    "message": "Adds a line with the tax withheld and Google's cut, so the net figure can be checked rather than trusted."
+    "message": "Adds a line with the tax withheld and, once Play reports enough to work it out, the exact rate of Google's cut — so the estimated net can be checked rather than trusted."
   }
 }
