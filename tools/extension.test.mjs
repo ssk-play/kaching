@@ -37,6 +37,7 @@ const order = (over = {}) => ({
   state: 'charged',
   subscription: false,
   product: 'Premium',
+  sku: 'premium_unlock',
   packageName: 'com.example.app',
   country: 'KR',
   total: { currency: 'USD', amount: 4.99 },
@@ -129,7 +130,7 @@ test('describe drops empty lines rather than printing blanks', () => {
     { ...DEFAULTS, showLocalTime: false, showUtcTime: false },
   )
   assert.ok(!sparse.includes('\n\n'), sparse)
-  assert.deepEqual(sparse.split('\n'), ['🔔 New order', 'Premium', 'com.example.app', order().id])
+  assert.deepEqual(sparse.split('\n'), ['🔔 New order', 'Premium · premium_unlock', 'com.example.app', order().id])
 })
 
 test('clampNumber falls back for blank input instead of clamping to the minimum', () => {
@@ -402,4 +403,13 @@ test('an estimate is rounded to the currency it is quoted in', () => {
     currency: 'USD',
     amount: 3.86,
   })
+})
+
+test('the product ID rides along with the display name', () => {
+  // The name is editable in the Console; the ID is what every API and every
+  // line of the developer's own code keys on.
+  assert.ok(describe(order(), DEFAULTS).includes('Premium · premium_unlock'))
+  // Nothing to add is not the same as something to repeat.
+  assert.ok(describe(order({ sku: 'Premium' }), DEFAULTS).includes('\nPremium\n'))
+  assert.ok(describe(order({ sku: '' }), DEFAULTS).includes('\nPremium\n'))
 })

@@ -154,9 +154,16 @@ export function describe(order, settings) {
           .join(' · ')
       : ''
 
+  // The product ID is what the Console, the Play API and your own code all key
+  // on; the display name is the only part of it that can be edited later. A
+  // name on its own leaves the reader guessing which SKU actually sold.
+  const product = [order.product, order.sku === order.product ? '' : order.sku]
+    .filter(Boolean)
+    .join(' · ')
+
   return [
     settings.senderName ? `[${settings.senderName}] ${head}` : head,
-    order.product,
+    product,
     [order.packageName, order.country].filter(Boolean).join(' · '),
     price,
     breakdown,

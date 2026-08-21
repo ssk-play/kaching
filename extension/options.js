@@ -61,6 +61,7 @@ const SAMPLE = {
   state: 'charged',
   subscription: false,
   product: 'Premium',
+  sku: 'premium_unlock',
   packageName: 'com.example.app',
   country: 'KR',
   total: { currency: 'USD', amount: 4.99 },
