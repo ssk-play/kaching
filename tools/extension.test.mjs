@@ -30,6 +30,10 @@ const { DEFAULTS, developerIdFrom, packageList, isConfigured, consoleUrlFor, cla
 const { matches, plan } = await load('filters.js')
 const { times, describe, feeRate, cycleOf, estimatedNet } = await load('format.js')
 const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('health.js')
+const { ratesFrom, merge, payoutCurrency, convert, rateFor } = await load('fx.js')
+const T = await load('totals.js')
+const { chatsIn } = await load('telegram.js')
+const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 
 const order = (over = {}) => ({
@@ -412,4 +416,215 @@ test('the product ID rides along with the display name', () => {
   // Nothing to add is not the same as something to repeat.
   assert.ok(describe(order({ sku: 'Premium' }), DEFAULTS).includes('\nPremium\n'))
   assert.ok(describe(order({ sku: '' }), DEFAULTS).includes('\nPremium\n'))
+})
+
+test('the exchange rate is read off orders Play has already settled', () => {
+  // Both figures ride on every settled order, so the rate is in hand without
+  // calling anything — which an extension that promises nothing leaves the
+  // browser could not do anyway.
+  const settled = [
+    { state: 'charged', at: 2, net: { currency: 'NOK', amount: 64.6 }, payout: { currency: 'KRW', amount: 9633 } },
+    { state: 'charged', at: 1, net: { currency: 'USD', amount: 1.69 }, payout: { currency: 'KRW', amount: 2354 } },
+    // Nothing to learn from these.
+    { state: 'charged', at: 3, net: null, payout: { currency: 'KRW', amount: 10 } },
+    { state: 'charged', at: 4, net: { currency: 'KRW', amount: 5 }, payout: { currency: 'KRW', amount: 5 } },
+  ]
+  const rates = ratesFrom(settled)
+  assert.deepEqual(Object.keys(rates).sort(), ['NOK>KRW', 'USD>KRW'])
+  assert.ok(Math.abs(rates['NOK>KRW'] - 9633 / 64.6) < 1e-9)
+  assert.equal(rates['KRW>KRW'], undefined)
+
+  assert.equal(payoutCurrency(settled), 'KRW')
+  assert.equal(payoutCurrency([]), null)
+
+  // Yesterday's rate survives a day when nothing settled in that currency.
+  assert.deepEqual(merge({ 'JPY>KRW': 9 }, { 'USD>KRW': 1300 }), { 'JPY>KRW': 9, 'USD>KRW': 1300 })
+  assert.deepEqual(merge({ 'USD>KRW': 1200 }, { 'USD>KRW': 1300 }), { 'USD>KRW': 1300 })
+})
+
+test('an unobserved currency pair is left alone rather than guessed at', () => {
+  const rates = { 'USD>KRW': 1300 }
+  assert.deepEqual(convert({ currency: 'USD', amount: 2 }, 'KRW', rates), {
+    currency: 'KRW',
+    amount: 2600,
+  })
+  // Already there.
+  assert.deepEqual(convert({ currency: 'KRW', amount: 5 }, 'KRW', rates), { currency: 'KRW', amount: 5 })
+  // Never seen: null, so the caller keeps the buyer-currency figure.
+  assert.equal(convert({ currency: 'NOK', amount: 10 }, 'KRW', rates), null)
+  assert.equal(convert(null, 'KRW', rates), null)
+  assert.equal(convert({ currency: 'USD', amount: 2 }, null, rates), null)
+})
+
+test('an estimate is converted into the currency the developer is paid in', () => {
+  // The whole complaint: a figure in the buyer's currency is not the number
+  // anyone budgets in.
+  const fx = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
+  const unsettled = order({ payout: null, net: null })
+  // 4.54 x 0.85 x 1300, rounded once at the end rather than twice.
+  assert.deepEqual(estimatedNet(unsettled, fx), { currency: 'KRW', amount: 5017 })
+  // Rounded to KRW's own unit, not carried at USD precision.
+  assert.equal(Number.isInteger(estimatedNet(unsettled, fx).amount), true)
+
+  const line = describe(unsettled, DEFAULTS, fx).split('\n').find((l) => l.includes('→'))
+  assert.match(line, /USD 4\.99 → KRW 5,017 est\. net · 15% fee assumed$/)
+
+  // No rate for the pair: the buyer-currency figure stands rather than a guess.
+  assert.deepEqual(estimatedNet(unsettled, { currency: 'KRW', rates: {} }), {
+    currency: 'USD',
+    amount: 3.86,
+  })
+  // A settled order is Play's own payout and is never touched by any of this.
+  assert.deepEqual(estimatedNet(order(), fx), { currency: 'KRW', amount: 6500 })
+})
+
+test('the newest settled order sets the rate, whatever order they arrive in', () => {
+  // fetchOrders returns newest first, so keeping the last match would have kept
+  // the oldest rate in the window — and re-learned it on every poll.
+  const newest = { state: 'charged', at: 200, net: { currency: 'USD', amount: 1 }, payout: { currency: 'KRW', amount: 1400 } }
+  const oldest = { state: 'charged', at: 100, net: { currency: 'USD', amount: 1 }, payout: { currency: 'KRW', amount: 1200 } }
+  assert.equal(ratesFrom([newest, oldest])['USD>KRW'], 1400)
+  assert.equal(ratesFrom([oldest, newest])['USD>KRW'], 1400)
+})
+
+test('a rate is never learned from a reversal or stored negative', () => {
+  // Play's sign convention on a refund is not something to bet the whole
+  // currency pair on: one mismatch would turn every later sale into money out.
+  const refund = { state: 'refunded', at: 300, net: { currency: 'USD', amount: 3.86 }, payout: { currency: 'KRW', amount: -5300 } }
+  assert.deepEqual(ratesFrom([refund]), {})
+  const wrong = { state: 'charged', at: 300, net: { currency: 'USD', amount: 3.86 }, payout: { currency: 'KRW', amount: -5300 } }
+  assert.deepEqual(ratesFrom([wrong]), {})
+  // And a negative rate already in storage is refused on the way out.
+  assert.equal(rateFor('USD', 'KRW', { 'USD>KRW': -1300 }), null)
+  assert.equal(convert({ currency: 'USD', amount: 2 }, 'KRW', { 'USD>KRW': -1300 }), null)
+})
+
+test('a conversion states the rate it crossed at', () => {
+  // Otherwise the breakdown cannot be reconciled with the price line, which is
+  // the only reason the setting exists.
+  const fx = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
+  const text = describe(order({ payout: null, net: null }), { ...DEFAULTS, showBreakdown: true }, fx)
+  assert.ok(text.includes('KRW 5,017 est. net'), text)
+  assert.ok(text.includes('USD→KRW 1,300'), text)
+  // Nothing crossed, nothing to disclose.
+  const same = describe(order(), { ...DEFAULTS, showBreakdown: true }, fx)
+  assert.ok(!same.includes('→KRW 1,300'), same)
+})
+
+test('a day is the developer\'s day, not UTC', () => {
+  // A sale at 08:40 in Seoul belongs to that morning. A UTC key would file it
+  // against the day before and make the footer disagree with the timestamp
+  // printed directly above it.
+  const ms = Date.UTC(2026, 7, 18, 23, 40)
+  assert.equal(T.dayKey(ms, 'Asia/Seoul'), '2026-08-19')
+  assert.equal(T.dayKey(ms, 'UTC'), '2026-08-18')
+  assert.equal(T.monthKey('2026-08-19'), '2026-08')
+})
+
+test('totals sum a day and a month from the same buckets', () => {
+  let b = {}
+  const krw = (amount) => ({ currency: 'KRW', amount })
+  b = T.record(b, '2026-08-19', { net: krw(5000), currency: 'KRW' })
+  b = T.record(b, '2026-08-19', { net: krw(3000), currency: 'KRW' })
+  b = T.record(b, '2026-08-20', { net: krw(1000), currency: 'KRW' })
+  b = T.record(b, '2026-07-31', { net: krw(9999), currency: 'KRW' })
+
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 })
+  // Same function answers the month, so the two figures cannot drift apart.
+  assert.equal(T.sum(b, '2026-08').amount, 9000)
+  assert.equal(T.sum(b, '2026-08').orders, 3)
+  assert.equal(T.sum(b, '2026-09').orders, 0)
+})
+
+test('a total never quietly absorbs money it could not convert', () => {
+  // Adding NOK to a KRW total would produce a number that looks right and is
+  // not, so it is counted apart and the line says so.
+  let b = T.record({}, '2026-08-19', { net: { currency: 'NOK', amount: 64.6 }, currency: 'KRW' })
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 0, orders: 1, refunds: 0, uncounted: 1 })
+  // A refund is counted, never added.
+  b = T.record(b, '2026-08-19', { net: null, refund: true, currency: 'KRW' })
+  assert.equal(T.sum(b, '2026-08-19').refunds, 1)
+  assert.equal(T.sum(b, '2026-08-19').amount, 0)
+})
+
+test('buckets are bounded so a year of history cannot grow without limit', () => {
+  const many = Object.fromEntries(
+    Array.from({ length: 5 }, (_, i) => [`2026-01-0${i + 1}`, { currency: 'KRW', amount: i, orders: 1, refunds: 0, uncounted: 0 }]),
+  )
+  const kept = T.trim(many, 3)
+  // Oldest dropped, newest kept — ISO keys sort chronologically, which is the
+  // whole reason for that format.
+  assert.deepEqual(Object.keys(kept), ['2026-01-03', '2026-01-04', '2026-01-05'])
+  assert.deepEqual(T.trim(many, 5), many)
+})
+
+test('one formatter draws both the footer and the /today answer', () => {
+  // Same function, same buckets, same prefix rules — so the figure the chat
+  // volunteers under an order cannot disagree with the one it reports when
+  // asked. Only the leading word differs.
+  const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 1, uncounted: 0 }
+  assert.equal(totalLine('totalToday', totals), 'Today KRW 8,000 · 2 orders · 1 refund')
+  assert.equal(totalLine('totalMonth', totals), 'This month KRW 8,000 · 2 orders · 1 refund')
+  assert.equal(
+    totalLine('totalToday', totals).replace('Today', ''),
+    totalLine('totalMonth', totals).replace('This month', ''),
+  )
+  // Nothing yet is nothing to say under an order; the query path supplies its
+  // own zero line instead.
+  assert.equal(totalLine('totalToday', { currency: null, amount: 0, orders: 0, refunds: 0, uncounted: 0 }), null)
+  assert.equal(totalLine('totalToday', null), null)
+  assert.ok(totalLine('totalToday', { ...totals, uncounted: 2 }).endsWith('2 not converted'))
+})
+
+test('English counts read right at one, not "1 orders"', () => {
+  // The default footer means the first order of every single day would have
+  // shown it — chrome.i18n has no plural forms, so the singular is its own key.
+  const one = { currency: 'KRW', amount: 5020, orders: 1, refunds: 1, uncounted: 0 }
+  assert.equal(totalLine('totalToday', one), 'Today KRW 5,020 · 1 order · 1 refund')
+  assert.equal(totalLine('totalMonth', one), 'This month KRW 5,020 · 1 order · 1 refund')
+})
+
+test('a rate below 1 is disclosed as a number, not as zero', () => {
+  // A developer paid in USD whose buyers pay in KRW: two decimal places would
+  // print the rate as "0" on the line that exists to make the net checkable.
+  const fx = { currency: 'USD', rates: { 'KRW>USD': 0.00073 } }
+  const krw = order({
+    payout: null, net: null, beforeFee: null, tax: null,
+    total: { currency: 'KRW', amount: 12000 },
+  })
+  const text = describe(krw, { ...DEFAULTS, showBreakdown: true }, fx)
+  assert.ok(text.includes('KRW→USD 0.00073'), text)
+  assert.ok(text.includes('USD 7.45 est. net'), text)
+})
+
+test('a net Play reported but has not converted still lands in the payout currency', () => {
+  // Field 27 filled, field 28 not yet: without this the order printed — and was
+  // totalled — in a currency the developer is never paid in.
+  const fx = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
+  const half = order({ payout: null })
+  assert.deepEqual(estimatedNet(half, fx), { currency: 'KRW', amount: 5018 })
+  // Play's own payout is already there and is left exactly as reported.
+  assert.deepEqual(estimatedNet(order(), fx), { currency: 'KRW', amount: 6500 })
+  // No rate for the pair: the reported figure stands rather than a guess.
+  assert.deepEqual(estimatedNet(half, { currency: 'KRW', rates: {} }), {
+    currency: 'USD',
+    amount: 3.86,
+  })
+})
+
+test('chats are recognised from both private messages and channel posts', () => {
+  // Find chat ID has to keep working after a poll has acknowledged the update
+  // that named the chat, so the poller banks chats in this same shape.
+  const list = [
+    { update_id: 1, message: { chat: { id: 111, first_name: 'Ada' }, text: '/today' } },
+    { update_id: 2, channel_post: { chat: { id: -222, title: 'Sales' }, text: 'hi' } },
+    // Same chat twice is one entry.
+    { update_id: 3, message: { chat: { id: 111, first_name: 'Ada' }, text: 'hi' } },
+    { update_id: 4 },
+  ]
+  assert.deepEqual(chatsIn(list), [
+    { id: 111, name: 'Ada' },
+    { id: -222, name: 'Sales' },
+  ])
+  assert.deepEqual(chatsIn([]), [])
 })

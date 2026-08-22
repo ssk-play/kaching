@@ -1,8 +1,10 @@
-import { send as sendTelegram, findChatId } from './telegram.js'
+import { send as sendTelegram, findChatId, updates as tgUpdates, chatsIn } from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured } from './settings.js'
 import { plan } from './filters.js'
-import { describe, label } from './format.js'
+import { describe, label, estimatedNet, totalLine } from './format.js'
+import { ratesFrom, merge, payoutCurrency } from './fx.js'
+import { record as tally, sum as sumTotals, trim as trimTotals, dayKey, monthKey } from './totals.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
 import { record, recordOnce, clear as clearLog } from './log.js'
@@ -21,6 +23,23 @@ const state = () =>
   chrome.storage.local.get({
     seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0, lastOkAt: 0,
   })
+
+// Every settled order carries the same money twice — the buyer's currency and
+// the developer's — so the rate between them is learned from orders that have
+// already arrived. Kept across runs because an unsettled order in a currency
+// nothing settled in today would otherwise print in the buyer's.
+async function exchange(all, epoch) {
+  const { rates: stored, payoutCurrency: last } = await chrome.storage.local.get({
+    rates: {}, payoutCurrency: null,
+  })
+  const rates = merge(stored, ratesFrom(all))
+  const currency = payoutCurrency(all) ?? last
+  // A reset means the user is pointing this at a different developer account.
+  // Writing back what this in-flight fetch learned would restore that account's
+  // currency and rates over the slate they just cleared.
+  if (epoch === resetEpoch) await chrome.storage.local.set({ rates, payoutCurrency: currency })
+  return { rates, currency }
+}
 
 // Reset must win over a poll that is already mid-flight. A poll captures the
 // epoch when it starts and stops writing if it changed, rather than restoring
@@ -60,7 +79,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   const handlers = {
     poll: () => poll(),
     rearm: () => rearm(),
-    findChatId: async () => findChatId(msg.botToken || (await load()).botToken),
+    findChatId: async () => {
+      const token = msg.botToken || (await load()).botToken
+      const live = await findChatId(token)
+      // Whatever the server still holds, plus what polls have already consumed.
+      const { knownChats } = await chrome.storage.local.get({ knownChats: [] })
+      return [...knownChats.filter((c) => !live.some((n) => n.id === c.id)), ...live]
+    },
     test: async () => {
       const s = await load()
       if (!s.botToken || !s.chatId) throw new Error(t('msgNeedSetup'))
@@ -68,8 +93,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     },
     reset: async () => {
       resetEpoch += 1
+      // Learned rates and the payout currency go too: they describe a developer
+      // account, and a reset is what someone does after pointing this at a
+      // different one. Keeping them would convert the new account's money
+      // through the old account's currency.
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
+        rates: {}, payoutCurrency: null, totals: {},
       })
       badge('', '#9e9e9e')
       await record('info', 'logReset')
@@ -105,6 +135,81 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   return true
 })
 
+// Answers /today and /month from the same buckets the footer is drawn from, so
+// the figure the chat reports on request can never disagree with one it already
+// volunteered.
+//
+// Only ever reached once a chat id is configured: reading updates with an offset
+// acknowledges them, and Telegram then drops them — which would eat the very
+// message Find chat ID reads.
+async function answerCommands(s) {
+  // The cursor is kept against the token that produced it: update ids run per
+  // bot, so one left over from a previous bot would sit above everything the new
+  // one will ever send, and every command would be skipped in silence.
+  const stored = (await chrome.storage.local.get({ updateCursor: null })).updateCursor
+  const from = stored?.token === s.botToken ? stored.at : 0
+
+  const list = await tgUpdates(s.botToken, from)
+  if (!list.length) return
+
+  // Banked before anything else can fail: acknowledging these updates is what
+  // takes them away from Find chat ID, so what they revealed has to survive here
+  // instead.
+  await rememberChats(chatsIn(list))
+
+  const { totals } = await chrome.storage.local.get({ totals: {} })
+  const today = dayKey(Date.now())
+  // Only moves past what was actually dealt with. A reply lost to a 429 or a
+  // dropped connection is left unacknowledged so the next poll tries again,
+  // rather than being confirmed away unanswered and unlogged.
+  let done = from
+  for (const u of list) {
+    const chat = u.message?.chat
+    // Anyone can message a bot whose username they know. Only the configured
+    // chat gets told what this account earns.
+    // Anyone can message a bot whose username they know. Nothing to answer is
+    // still something dealt with, so the cursor moves past it either way.
+    const cmd =
+      chat && String(chat.id) === String(s.chatId)
+        ? // "/month@somebot" is what Telegram delivers in a group.
+          String(u.message.text ?? '').trim().toLowerCase().split(/[@\s]/)[0]
+        : ''
+    const key = cmd === '/today' ? 'totalToday' : cmd === '/month' ? 'totalMonth' : null
+    const reply = key
+      ? totalLine(key, sumTotals(totals, key === 'totalToday' ? today : monthKey(today))) ??
+        t(key, '—', 0)
+      : cmd === '/start' || cmd === '/help'
+        ? t('cmdHelp')
+        : null
+    if (reply) {
+      // Only a reply that actually landed is logged as answered, and only then
+      // is the command written off. The log is the one diagnostic surface here;
+      // reporting a delivery that never happened is worse than saying nothing.
+      const landed = await sendTelegram(s.botToken, s.chatId, label(s, reply)).then(
+        () => true,
+        () => false,
+      )
+      if (!landed) break
+      await record('info', 'logAnswered', cmd)
+    }
+    done = u.update_id + 1
+  }
+  if (done > from) {
+    await chrome.storage.local.set({ updateCursor: { token: s.botToken, at: done } })
+  }
+}
+
+// A short list, newest last, of chats that have talked to this bot. It exists so
+// Find chat ID still works after a poll has consumed the update that named them.
+const MAX_CHATS = 20
+
+async function rememberChats(seen) {
+  if (!seen.length) return
+  const { knownChats } = await chrome.storage.local.get({ knownChats: [] })
+  const merged = [...knownChats.filter((c) => !seen.some((n) => n.id === c.id)), ...seen]
+  await chrome.storage.local.set({ knownChats: merged.slice(-MAX_CHATS) })
+}
+
 // ------------------------------------------------------------------------ poll
 
 let inflight = null
@@ -139,6 +244,8 @@ async function runPoll() {
     await recordOnce('warn', 'logNeedSetup')
     return { needsSetup: true }
   }
+  // A chat convenience must never take down the job people installed this for.
+  await answerCommands(s).catch((err) => console.warn('[kaching] commands', err))
   let orders
   try {
     orders = await fetchOrders({ developerId: s.developerId, days: s.days })
@@ -162,6 +269,9 @@ async function onSuccess(s, all) {
       : Promise.resolve()
 
   const { batch, overflow, muted, freshCount, unseenCount } = plan(terminal, seen, s, MAX_MESSAGES)
+  // Read off the whole fetch, not just what is being announced: a pending order
+  // converts on the back of settled ones this run will never mention.
+  const fx = await exchange(all, epoch)
 
   if (!st.bootstrapped) {
     // First run adopts what is already there. Announcing history would train the
@@ -189,16 +299,44 @@ async function onSuccess(s, all) {
   // costs almost nothing, and a worker death loses at most the single order
   // whose send had already landed.
   const journal = []
+  let buckets = (await chrome.storage.local.get({ totals: {} })).totals
   const note = (o) => {
     journal.push(keyFor(o))
+    // Totals ride on the same write as the journal, so an order can never be
+    // counted twice: whatever survives a worker death is exactly what was
+    // already delivered.
     return epoch === resetEpoch
-      ? chrome.storage.local.set({ delivered: journal })
+      ? chrome.storage.local.set({ delivered: journal, totals: buckets })
       : Promise.resolve()
+  }
+
+  // Counted before the message is rendered, so the footer includes the order it
+  // is attached to. Muted orders are left out on purpose — a total the reader
+  // cannot reconcile against the messages they were sent is worse than none.
+  //
+  // Filed under the day it is announced, not the day Play stamped it. The two
+  // differ only for an order that surfaced late or crossed midnight, and filing
+  // by the charge date would drop such an order out of the very footer attached
+  // to it — a running tally the reader cannot follow line by line is no use to
+  // them. It is a tally of what this told you, and says so.
+  const count = (o) => {
+    buckets = trimTotals(
+      tally(buckets, dayKey(Date.now()), {
+        net: estimatedNet(o, fx),
+        refund: o.state === 'refunded',
+        currency: fx.currency,
+      }),
+    )
   }
 
   try {
     for (const o of batch) {
-      await sendTelegram(s.botToken, s.chatId, describe(o, s))
+      count(o)
+      const footer = s.showDailyTotal
+        ? totalLine('totalToday', sumTotals(buckets, dayKey(Date.now())))
+        : null
+      const text = [describe(o, s, fx), footer].filter(Boolean).join('\n')
+      await sendTelegram(s.botToken, s.chatId, text)
       await record('order', 'logOrder', o.product || o.id, o.state)
       await note(o)
     }
@@ -206,7 +344,10 @@ async function onSuccess(s, all) {
       await sendTelegram(s.botToken, s.chatId, label(s, t('tgMore', overflow.length)))
       // Only once that notice is out may the tail be written off. Banking it
       // first buried orders the user was never told existed.
-      for (const o of overflow) await note(o)
+      for (const o of overflow) {
+        count(o)
+        await note(o)
+      }
     }
   } catch (err) {
     // A reset landed mid-run; recording failure state would re-dirty the slate

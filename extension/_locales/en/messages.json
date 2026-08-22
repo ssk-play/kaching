@@ -257,6 +257,42 @@
   "labelNet": {
     "message": "est. net"
   },
+  "totalToday": {
+    "message": "Today $1 · $2 orders"
+  },
+  "totalMonth": {
+    "message": "This month $1 · $2 orders"
+  },
+  "totalRefunds": {
+    "message": "$1 refunds"
+  },
+  "totalUncounted": {
+    "message": "$1 not converted"
+  },
+  "lblDailyTotal": {
+    "message": "Show the day's running total"
+  },
+  "hintDailyTotal": {
+    "message": "Adds a footer to every order message with what the day has announced so far. The bot answers /today and /month either way; this only controls the footer."
+  },
+  "cmdHelp": {
+    "message": "Send /today or /month for a running total. Answers arrive at the next check, not instantly."
+  },
+  "logAnswered": {
+    "message": "Answered $1"
+  },
+  "totalTodayOne": {
+    "message": "Today $1 · $2 order"
+  },
+  "totalMonthOne": {
+    "message": "This month $1 · $2 order"
+  },
+  "totalRefundsOne": {
+    "message": "$1 refund"
+  },
+  "labelRate": {
+    "message": "$1→$2 $3"
+  },
   "labelTax": {
     "message": "tax"
   },
