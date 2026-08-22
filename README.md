@@ -16,8 +16,8 @@ GPA.1234-5678-9012-34567
 Today KRW 18,740 · 4 orders
 ```
 
-Send the bot `/today` for the day so far or `/month` for the month to date —
-both appear in the bot's own command menu, so there is nothing to memorise.
+Send the bot `/today`, `/week` (from Sunday) or `/month` — all three appear in
+the bot's own command menu, so there is nothing to memorise.
 Answers come back within a second or two: a separate one-minute alarm holds a
 long poll open on Telegram, so a command is usually waited for rather than
 looked for.

@@ -6,7 +6,9 @@ import { load, isConfigured } from './settings.js'
 import { plan } from './filters.js'
 import { describe, label, estimatedNet, totalLine } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
-import { record as tally, sum as sumTotals, trim as trimTotals, dayKey, monthKey } from './totals.js'
+import {
+  record as tally, sum as sumTotals, sumRange, trim as trimTotals, dayKey, monthKey, weekStart,
+} from './totals.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
 import { record, recordOnce, clear as clearLog } from './log.js'
@@ -269,10 +271,9 @@ async function waitForCommands(s) {
         ? // "/month@somebot" is what Telegram delivers in a group.
           String(u.message.text ?? '').trim().toLowerCase().split(/[@\s]/)[0]
         : ''
-    const key = cmd === '/today' ? 'totalToday' : cmd === '/month' ? 'totalMonth' : null
+    const key = SPANS[cmd]
     const reply = key
-      ? totalLine(key, sumTotals(totals, key === 'totalToday' ? today : monthKey(today))) ??
-        t(key, '—', 0)
+      ? totalLine(key, spanOf(totals, key, today)) ?? t(key, '—', 0)
       : cmd === '/start' || cmd === '/help'
         ? t('cmdHelp')
         : null
@@ -292,6 +293,14 @@ async function waitForCommands(s) {
   if (done > from) {
     await chrome.storage.local.set({ updateCursor: { token: s.botToken, at: done } })
   }
+}
+
+const SPANS = { '/today': 'totalToday', '/week': 'totalWeek', '/month': 'totalMonth' }
+
+// A week straddles months, so it is a range where the other two are prefixes.
+function spanOf(totals, key, today) {
+  if (key === 'totalWeek') return sumRange(totals, weekStart(today), today)
+  return sumTotals(totals, key === 'totalToday' ? today : monthKey(today))
 }
 
 // A short list, newest last, of chats that have talked to this bot. It exists so

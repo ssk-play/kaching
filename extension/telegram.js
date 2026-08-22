@@ -85,11 +85,13 @@ export async function updates(botToken, offset, waitSeconds = 0) {
 const MENU = {
   en: [
     { command: 'today', description: "Today's total so far" },
+    { command: 'week', description: 'This week so far (from Sunday)' },
     { command: 'month', description: 'This month so far' },
     { command: 'help', description: 'What this bot can do' },
   ],
   ko: [
     { command: 'today', description: '오늘 누계' },
+    { command: 'week', description: '이번 주 누계 (일요일부터)' },
     { command: 'month', description: '이번 달 누계' },
     { command: 'help', description: '이 봇이 할 수 있는 일' },
   ],

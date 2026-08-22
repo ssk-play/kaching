@@ -22,6 +22,15 @@ export function dayKey(ms, timeZone = Intl.DateTimeFormat().resolvedOptions().ti
 
 export const monthKey = (key) => key.slice(0, 7)
 
+// The Sunday on or before the given day. Parsed as UTC deliberately: the key is
+// already the developer's own calendar date, and re-reading it in local time
+// would shift it a day for anyone west of Greenwich.
+export function weekStart(key) {
+  const day = new Date(`${key}T00:00:00Z`)
+  day.setUTCDate(day.getUTCDate() - day.getUTCDay())
+  return day.toISOString().slice(0, 10)
+}
+
 const empty = () => ({ currency: null, amount: 0, orders: 0, refunds: 0, uncounted: 0 })
 
 // Only money already in the developer's own currency is summed. An order whose
@@ -42,10 +51,16 @@ export function record(buckets, key, { net, refund, currency }) {
 // Every bucket whose key starts with the prefix: a full day key sums one day, a
 // "YYYY-MM" prefix sums the month. Same function either way, so the two figures
 // can never drift apart.
-export function sum(buckets, prefix) {
+export const sum = (buckets, prefix) => fold(buckets, (key) => key.startsWith(prefix))
+
+// A week straddles months, so it cannot be a prefix. It can be a range, because
+// ISO dates compare lexicographically — which is the whole reason for the format.
+export const sumRange = (buckets, from, to) => fold(buckets, (key) => key >= from && key <= to)
+
+function fold(buckets, wanted) {
   const out = empty()
   for (const [key, b] of Object.entries(buckets)) {
-    if (!key.startsWith(prefix)) continue
+    if (!wanted(key)) continue
     out.currency ??= b.currency
     out.amount += b.amount
     out.orders += b.orders

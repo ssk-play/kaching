@@ -628,3 +628,40 @@ test('chats are recognised from both private messages and channel posts', () => 
   ])
   assert.deepEqual(chatsIn([]), [])
 })
+
+test('a week starts on Sunday and can straddle a month', () => {
+  // 2026-08-19 is a Wednesday; its week began Sunday the 16th.
+  assert.equal(T.weekStart('2026-08-19'), '2026-08-16')
+  // A Sunday is its own start, not the week before.
+  assert.equal(T.weekStart('2026-08-16'), '2026-08-16')
+  // Saturday is the last day of the same week.
+  assert.equal(T.weekStart('2026-08-22'), '2026-08-16')
+  // 2026-09-01 is a Tuesday, so its week reaches back into August.
+  assert.equal(T.weekStart('2026-09-01'), '2026-08-30')
+})
+
+test('the week total spans a month boundary the month total cannot', () => {
+  const krw = (amount) => ({ currency: 'KRW', amount })
+  let b = {}
+  b = T.record(b, '2026-08-30', { net: krw(1000), currency: 'KRW' })  // Sunday
+  b = T.record(b, '2026-08-31', { net: krw(2000), currency: 'KRW' })
+  b = T.record(b, '2026-09-01', { net: krw(4000), currency: 'KRW' })
+  b = T.record(b, '2026-08-29', { net: krw(500), currency: 'KRW' })   // Saturday, week before
+  b = T.record(b, '2026-09-06', { net: krw(800), currency: 'KRW' })   // week after
+
+  const today = '2026-09-01'
+  const week = T.sumRange(b, T.weekStart(today), today)
+  assert.equal(week.amount, 7000)
+  assert.equal(week.orders, 3)
+  // Neither month figure is the week's: August stops before the week ends,
+  // September starts after it began, and both reach past it in the other
+  // direction. That is exactly why the week is a range and not a prefix.
+  assert.equal(T.sum(b, '2026-08').amount, 3500)
+  assert.equal(T.sum(b, '2026-09').amount, 4800)
+})
+
+test('the week reads the same sentence as the day and the month', () => {
+  const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 }
+  assert.equal(totalLine('totalWeek', totals), 'This week KRW 8,000 · 2 orders')
+  assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week KRW 8,000 · 1 order')
+})
