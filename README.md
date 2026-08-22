@@ -17,8 +17,9 @@ Today KRW 18,740 · 4 orders
 ```
 
 Send the bot `/today` for the day so far or `/month` for the month to date.
-Answers arrive at the next check rather than instantly — nothing is listening
-between checks.
+Answers come back within a second or two: a separate one-minute alarm holds a
+long poll open on Telegram, so a command is usually waited for rather than
+looked for.
 
 ## Settings
 

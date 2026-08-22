@@ -34,8 +34,8 @@ phone beyond Telegram itself.
   optional line shows the breakdown
 - Order ID
 - Time in your local zone, in UTC, or both
-- What the day has brought in so far, as a footer. Sending the bot `/today` or
-  `/month` asks for the day or the month to date at any point
+- What the day has brought in so far, as a footer. Send the bot `/today` or
+  `/month` at any point and it answers within seconds
 
 **What you can control**
 

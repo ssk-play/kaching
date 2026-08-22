@@ -44,8 +44,14 @@ export function chatsIn(list) {
   return chats
 }
 
-// Short poll, never a long one: a service worker parked on a 30-second Telegram
-// hold is a worker Chrome is entitled to kill mid-hold.
+// waitSeconds holds the connection open until something arrives — the only way
+// to answer a command promptly without a server to receive a webhook. Keep it
+// under the 30s of inactivity Chrome tears a service worker down after, and let
+// the caller chain several waits rather than asking for one long one: a worker
+// killed mid-hold answers nothing and cannot even log that it did not.
+//
+// Telegram allows one getUpdates at a time and answers a second with 409, so the
+// caller has to keep exactly one in flight.
 //
 // The offset acknowledges everything below it, which Telegram then drops. That
 // is necessary rather than optional: without it getUpdates keeps returning the
@@ -55,9 +61,15 @@ export function chatsIn(list) {
 // What that costs — a poll consuming the message Find chat ID would have read —
 // is paid back elsewhere: the poller banks every chat it sees, and findChatId
 // answers from that memory as well as from the server.
-export async function updates(botToken, offset) {
+export async function updates(botToken, offset, waitSeconds = 0) {
   const from = offset > 0 ? `&offset=${offset}` : ''
-  const res = await fetch(`${API}${botToken}/getUpdates?timeout=0&allowed_updates=${KINDS}${from}`)
+  // A hung connection would hold the caller's single-flight slot open and stall
+  // every later check behind it, so the wait has a hard ceiling of its own.
+  const signal = AbortSignal.timeout((waitSeconds + 10) * 1000)
+  const res = await fetch(
+    `${API}${botToken}/getUpdates?timeout=${waitSeconds}&allowed_updates=${KINDS}${from}`,
+    { signal },
+  )
   const json = await res.json().catch(() => ({}))
   if (!json.ok) throw new Error(json.description ?? `getUpdates ${res.status}`)
   return json.result ?? []

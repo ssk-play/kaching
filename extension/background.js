@@ -16,6 +16,21 @@ import { record, recordOnce, clear as clearLog } from './log.js'
 const TERMINAL_STATES = new Set(['charged', 'refunded'])
 
 const ALARM = 'poll'
+// Commands run on their own schedule. Waiting for the order poll meant asking
+// /today and being answered up to ten minutes later, which is no answer at all.
+// One minute is the floor chrome.alarms allows; the long poll below covers the
+// gap, so the alarm is really just what restarts the wait.
+const COMMANDS_ALARM = 'commands'
+// Under the 30s idle window Chrome tears a service worker down in. Each pass
+// through the loop opens with a chrome.storage read, which resets that timer,
+// so waits chained at this length keep the worker alive where one long hold
+// would have been killed mid-wait — silently, since the worker that would have
+// logged it is the one that died.
+const LONG_POLL_SECONDS = 25
+// Roughly the alarm period, less the time one wait can overrun by. Stopping
+// short of a full minute is what keeps a slow pass from colliding with the next
+// alarm, which Telegram answers with 409.
+const LISTEN_WINDOW_MS = 45_000
 const MAX_SEEN = 5000
 const MAX_MESSAGES = 10
 
@@ -66,14 +81,41 @@ async function rearm() {
     // leaving the user to wonder for a full period.
     delayInMinutes: 0.5,
   })
+  await chrome.alarms.clear(COMMANDS_ALARM)
+  await chrome.alarms.create(COMMANDS_ALARM, { periodInMinutes: 1, delayInMinutes: 0.5 })
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== ALARM) return
-  // The alarm has no one to reject to; an unhandled rejection would take the
+  // Neither alarm has anyone to reject to; an unhandled rejection would take the
   // worker down and stop the schedule silently.
-  poll().catch((err) => console.warn('[kaching] poll failed', err))
+  if (alarm.name === ALARM) {
+    poll().catch((err) => console.warn('[kaching] poll failed', err))
+  } else if (alarm.name === COMMANDS_ALARM) {
+    listen().catch((err) => console.warn('[kaching] commands failed', err))
+  }
 })
+
+// Telegram answers a second concurrent getUpdates with 409, so exactly one wait
+// is ever open. A poll that overruns its minute simply keeps the slot until it
+// returns, and the next alarm finds it busy and does nothing.
+let answering = null
+
+function listen() {
+  answering ??= (async () => {
+    const s = await load()
+    if (!isConfigured(s)) return
+    await answerCommands(s)
+  })()
+    .catch((err) => {
+      // A chat convenience must never be able to take down the job people
+      // installed this for, and the next alarm is a minute away regardless.
+      console.warn('[kaching] commands', err)
+    })
+    .finally(() => {
+      answering = null
+    })
+  return answering
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   const handlers = {
@@ -81,8 +123,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     rearm: () => rearm(),
     findChatId: async () => {
       const token = msg.botToken || (await load()).botToken
-      const live = await findChatId(token)
-      // Whatever the server still holds, plus what polls have already consumed.
+      // The command listener holds Telegram's single getUpdates slot most of the
+      // time, and a second one is answered with 409 rather than a chat list. So
+      // the server is asked, and what it cannot give is taken from what the
+      // listener already banked — which is the whole reason that memory exists.
+      // Only the collision is swallowed. A bad token has to keep reaching the
+      // page, which turns it into the one hint the user can act on.
+      const live = await findChatId(token).catch((err) => {
+        if (!/409|Conflict/.test(String(err?.message ?? err))) throw err
+        return []
+      })
       const { knownChats } = await chrome.storage.local.get({ knownChats: [] })
       return [...knownChats.filter((c) => !live.some((n) => n.id === c.id)), ...live]
     },
@@ -143,13 +193,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
 // acknowledges them, and Telegram then drops them — which would eat the very
 // message Find chat ID reads.
 async function answerCommands(s) {
+  const until = Date.now() + LISTEN_WINDOW_MS
+  do {
+    await waitForCommands(s)
+  } while (Date.now() < until)
+}
+
+async function waitForCommands(s) {
   // The cursor is kept against the token that produced it: update ids run per
   // bot, so one left over from a previous bot would sit above everything the new
   // one will ever send, and every command would be skipped in silence.
   const stored = (await chrome.storage.local.get({ updateCursor: null })).updateCursor
   const from = stored?.token === s.botToken ? stored.at : 0
 
-  const list = await tgUpdates(s.botToken, from)
+  const list = await tgUpdates(s.botToken, from, LONG_POLL_SECONDS)
   if (!list.length) return
 
   // Banked before anything else can fail: acknowledging these updates is what
@@ -244,8 +301,6 @@ async function runPoll() {
     await recordOnce('warn', 'logNeedSetup')
     return { needsSetup: true }
   }
-  // A chat convenience must never take down the job people installed this for.
-  await answerCommands(s).catch((err) => console.warn('[kaching] commands', err))
   let orders
   try {
     orders = await fetchOrders({ developerId: s.developerId, days: s.days })
