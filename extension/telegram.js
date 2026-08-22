@@ -74,3 +74,38 @@ export async function updates(botToken, offset, waitSeconds = 0) {
   if (!json.ok) throw new Error(json.description ?? `getUpdates ${res.status}`)
   return json.result ?? []
 }
+
+// The command menu Telegram shows next to the input box, and autocompletes when
+// someone types "/". Without it these commands exist only for whoever read the
+// README — a feature nobody can find is a feature nobody has.
+//
+// Written out per language rather than pulled from chrome.i18n: both lists are
+// registered at once so the menu follows the *Telegram* user's language, and
+// chrome.i18n only ever yields the one locale the browser is running in.
+const MENU = {
+  en: [
+    { command: 'today', description: "Today's total so far" },
+    { command: 'month', description: 'This month so far' },
+    { command: 'help', description: 'What this bot can do' },
+  ],
+  ko: [
+    { command: 'today', description: '오늘 누계' },
+    { command: 'month', description: '이번 달 누계' },
+    { command: 'help', description: '이 봇이 할 수 있는 일' },
+  ],
+}
+
+export async function publishCommands(botToken) {
+  for (const [language, commands] of Object.entries(MENU)) {
+    const body = { commands }
+    // The entry with no language_code is the fallback every other locale gets.
+    if (language !== 'en') body.language_code = language
+    const res = await fetch(`${API}${botToken}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!json.ok) throw new Error(json.description ?? `setMyCommands ${res.status}`)
+  }
+}

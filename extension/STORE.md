@@ -35,7 +35,8 @@ phone beyond Telegram itself.
 - Order ID
 - Time in your local zone, in UTC, or both
 - What the day has brought in so far, as a footer. Send the bot `/today` or
-  `/month` at any point and it answers within seconds
+  `/month` at any point — both sit in the bot's command menu — and it answers
+  within seconds
 
 **What you can control**
 

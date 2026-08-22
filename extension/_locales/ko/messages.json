@@ -290,6 +290,9 @@
   "totalRefundsOne": {
     "message": "환불 $1건"
   },
+  "logMenu": {
+    "message": "봇 명령 메뉴 등록"
+  },
   "labelRate": {
     "message": "$1→$2 $3"
   },

@@ -290,6 +290,9 @@
   "totalRefundsOne": {
     "message": "$1 refund"
   },
+  "logMenu": {
+    "message": "Registered the bot command menu"
+  },
   "labelRate": {
     "message": "$1→$2 $3"
   },

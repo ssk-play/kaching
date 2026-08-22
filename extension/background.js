@@ -1,4 +1,6 @@
-import { send as sendTelegram, findChatId, updates as tgUpdates, chatsIn } from './telegram.js'
+import {
+  send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands,
+} from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured } from './settings.js'
 import { plan } from './filters.js'
@@ -83,6 +85,20 @@ async function rearm() {
   })
   await chrome.alarms.clear(COMMANDS_ALARM)
   await chrome.alarms.create(COMMANDS_ALARM, { periodInMinutes: 1, delayInMinutes: 0.5 })
+  publishMenu().catch((err) => console.warn('[kaching] menu', err))
+}
+
+// Registered once per token. Telegram keeps the menu on its side, so repeating
+// the call on every save would be a request that changes nothing — but a new
+// token is a new bot, with no menu at all until it is told.
+async function publishMenu() {
+  const { botToken } = await load()
+  if (!botToken) return
+  const { menuFor } = await chrome.storage.local.get({ menuFor: null })
+  if (menuFor === botToken) return
+  await publishCommands(botToken)
+  await chrome.storage.local.set({ menuFor: botToken })
+  await record('info', 'logMenu')
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
