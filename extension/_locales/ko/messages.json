@@ -293,6 +293,9 @@
   "logMenu": {
     "message": "봇 명령 메뉴 등록"
   },
+  "logMenuFail": {
+    "message": "봇 명령 메뉴 등록 실패 ($1)"
+  },
   "labelRate": {
     "message": "$1→$2 $3"
   },

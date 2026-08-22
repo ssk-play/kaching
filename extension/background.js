@@ -88,16 +88,38 @@ async function rearm() {
   publishMenu().catch((err) => console.warn('[kaching] menu', err))
 }
 
-// Registered once per token. Telegram keeps the menu on its side, so repeating
-// the call on every save would be a request that changes nothing — but a new
-// token is a new bot, with no menu at all until it is told.
-async function publishMenu() {
-  const { botToken } = await load()
-  if (!botToken) return
+// Registered once per bot-and-chat. Telegram keeps the menu on its side, so
+// repeating the call on every save would be a request that changes nothing — but
+// a new token is a new bot with no menu at all, and a new chat is a scope that
+// has never been told.
+//
+// Single-flight for the same reason the log is worth reading: two saves a few
+// hundred milliseconds apart would both find menuFor unset, and the log would
+// report the same registration twice.
+let publishing = null
+
+function publishMenu() {
+  publishing ??= registerMenu().finally(() => {
+    publishing = null
+  })
+  return publishing
+}
+
+async function registerMenu() {
+  const { botToken, chatId } = await load()
+  if (!botToken || !chatId) return
+  const key = `${botToken}:${chatId}`
   const { menuFor } = await chrome.storage.local.get({ menuFor: null })
-  if (menuFor === botToken) return
-  await publishCommands(botToken)
-  await chrome.storage.local.set({ menuFor: botToken })
+  if (menuFor === key) return
+  try {
+    await publishCommands(botToken, chatId)
+  } catch (err) {
+    // Only reaching the worker console would leave the menu quietly absent with
+    // nothing on the one surface anyone here checks to say why.
+    await record('warn', 'logMenuFail', String(err?.message ?? err))
+    return
+  }
+  await chrome.storage.local.set({ menuFor: key })
   await record('info', 'logMenu')
 }
 

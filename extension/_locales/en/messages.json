@@ -293,6 +293,9 @@
   "logMenu": {
     "message": "Registered the bot command menu"
   },
+  "logMenuFail": {
+    "message": "Could not register the bot command menu ($1)"
+  },
   "labelRate": {
     "message": "$1→$2 $3"
   },

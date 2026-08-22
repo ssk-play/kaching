@@ -95,17 +95,30 @@ const MENU = {
   ],
 }
 
-export async function publishCommands(botToken) {
+async function call(botToken, method, body) {
+  const res = await fetch(`${API}${botToken}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!json.ok) throw new Error(json.description ?? `${method} ${res.status}`)
+}
+
+// Scoped to the one chat this bot answers in, not to every chat it is in.
+// The default scope would autocomplete /today for anyone who can reach the bot —
+// a teammate in the same group, or a stranger who knows its username — and every
+// one of them would be typing a command that is answered with silence, because
+// replies only ever go to the configured chat.
+export async function publishCommands(botToken, chatId) {
+  const scope = { type: 'chat', chat_id: chatId }
+  // Clears a default-scope list left by an earlier version of this extension, so
+  // the advertisement stops where the answers stop.
+  await call(botToken, 'deleteMyCommands', {})
   for (const [language, commands] of Object.entries(MENU)) {
-    const body = { commands }
+    const body = { commands, scope }
     // The entry with no language_code is the fallback every other locale gets.
     if (language !== 'en') body.language_code = language
-    const res = await fetch(`${API}${botToken}/setMyCommands`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const json = await res.json().catch(() => ({}))
-    if (!json.ok) throw new Error(json.description ?? `setMyCommands ${res.status}`)
+    await call(botToken, 'setMyCommands', body)
   }
 }
