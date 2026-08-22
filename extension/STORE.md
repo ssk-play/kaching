@@ -26,19 +26,24 @@ phone beyond Telegram itself.
 
 **What you get in each message**
 
-- Product name and package
+- Product name, product ID and package
 - Buyer country
 - Amount charged and your estimated net — what is left after tax and Google's
-  cut, converted to your own currency, with an optional line showing the
-  breakdown
+  cut. Before Play settles an order that is an estimate in the buyer's currency,
+  and it says so on the line; afterwards it is Play's own figure in yours. An
+  optional line shows the breakdown
 - Order ID
 - Time in your local zone, in UTC, or both
+- What the day has brought in so far, as a footer. Send the bot `/today`,
+  `/week` or `/month` at any point — all three sit in the bot's command menu —
+  and it answers within seconds
 
 **What you can control**
 
 - Which events to hear about — new orders, refunds, or both
 - Which apps to watch, or all of them
 - A minimum payout, so zero-value test orders stay quiet
+- Whether each message carries the day's running total
 - How often to check, and how far back each check reads
 - An optional sender label, for when one Telegram chat collects alerts from
   several places

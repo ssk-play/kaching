@@ -22,6 +22,7 @@ export const DEFAULTS = {
   showLocalTime: true,
   showUtcTime: true,
   showBreakdown: false,
+  showDailyTotal: true,
 
   // schedule
   intervalMinutes: 10,

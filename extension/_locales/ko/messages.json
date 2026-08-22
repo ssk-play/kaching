@@ -173,6 +173,9 @@
   "notifNewSub": {
     "message": "새 구독"
   },
+  "notifSubRenewal": {
+    "message": "구독 재결제 · 결제 $1회차"
+  },
   "notifRefund": {
     "message": "환불"
   },
@@ -252,7 +255,55 @@
     "message": "$1회째 실패"
   },
   "labelNet": {
-    "message": "순수익"
+    "message": "예상 순수익"
+  },
+  "totalToday": {
+    "message": "오늘 $1 · $2건"
+  },
+  "totalMonth": {
+    "message": "이번 달 $1 · $2건"
+  },
+  "totalRefunds": {
+    "message": "환불 $1건"
+  },
+  "totalUncounted": {
+    "message": "환산 불가 $1건"
+  },
+  "lblDailyTotal": {
+    "message": "당일 누계 표시"
+  },
+  "hintDailyTotal": {
+    "message": "주문 메시지마다 그날 알린 누계를 한 줄로 덧붙입니다. /today · /month 응답은 이 설정과 무관하게 동작하며, 여기서는 푸터만 켜고 끕니다."
+  },
+  "cmdHelp": {
+    "message": "/today · /week · /month 를 보내면 누계를 알려드립니다."
+  },
+  "logAnswered": {
+    "message": "$1 응답"
+  },
+  "totalTodayOne": {
+    "message": "오늘 $1 · $2건"
+  },
+  "totalMonthOne": {
+    "message": "이번 달 $1 · $2건"
+  },
+  "totalRefundsOne": {
+    "message": "환불 $1건"
+  },
+  "logMenu": {
+    "message": "봇 명령 메뉴 등록"
+  },
+  "logMenuFail": {
+    "message": "봇 명령 메뉴 등록 실패 ($1)"
+  },
+  "totalWeek": {
+    "message": "이번 주 $1 · $2건"
+  },
+  "totalWeekOne": {
+    "message": "이번 주 $1 · $2건"
+  },
+  "labelRate": {
+    "message": "$1→$2 $3"
   },
   "labelTax": {
     "message": "세금"
@@ -260,10 +311,13 @@
   "labelFee": {
     "message": "수수료 $1%"
   },
+  "labelNetAssumed": {
+    "message": "예상 순수익 · 수수료 $1% 가정"
+  },
   "lblBreakdown": {
     "message": "세금·수수료 내역 표시"
   },
   "hintBreakdown": {
-    "message": "원천 세금과 구글 수수료를 한 줄로 덧붙입니다. 순수익을 믿는 대신 검산할 수 있습니다."
+    "message": "원천 세금과, 구글이 정산 내역을 내려주면 실제 수수료율까지 한 줄로 덧붙입니다. 예상 순수익을 믿는 대신 검산할 수 있습니다."
   }
 }

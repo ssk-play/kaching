@@ -1,7 +1,7 @@
 import {
   DEFAULTS, load, developerIdFrom, isConfigured, consoleUrlFor, clampNumber,
 } from './settings.js'
-import { describe } from './format.js'
+import { describe, totalLine } from './format.js'
 import { read as readLog, MAX_ENTRIES } from './log.js'
 import { t } from './i18n.js'
 
@@ -23,7 +23,8 @@ for (const el of document.querySelectorAll('[data-i18n]')) {
 // ------------------------------------------------------------------- form <-> storage
 
 const CHECKBOXES = [
-  'notifyCharged', 'notifyRefunded', 'showLocalTime', 'showUtcTime', 'showBreakdown', 'verbose',
+  'notifyCharged', 'notifyRefunded', 'showLocalTime', 'showUtcTime', 'showBreakdown',
+  'showDailyTotal', 'verbose',
 ]
 const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
 const TEXTS = ['botToken', 'chatId', 'senderName', 'consoleUrl', 'packages']
@@ -61,6 +62,7 @@ const SAMPLE = {
   state: 'charged',
   subscription: false,
   product: 'Premium',
+  sku: 'premium_unlock',
   packageName: 'com.example.app',
   country: 'KR',
   total: { currency: 'USD', amount: 4.99 },
@@ -71,10 +73,16 @@ const SAMPLE = {
   at: Date.now(),
 }
 
+// A day already under way, so the footer shows what it will actually look like
+// rather than the single-order case.
+const SAMPLE_DAY = { currency: 'KRW', amount: 18740, orders: 4, refunds: 0, uncounted: 0 }
+
 const renderPreview = () => {
-  $('preview').textContent = describe(SAMPLE, read())
+  const s = read()
+  const footer = s.showDailyTotal ? totalLine('totalToday', SAMPLE_DAY) : null
+  $('preview').textContent = [describe(SAMPLE, s), footer].filter(Boolean).join('\n')
 }
-for (const id of ['senderName', 'showLocalTime', 'showUtcTime', 'showBreakdown']) {
+for (const id of ['senderName', 'showLocalTime', 'showUtcTime', 'showBreakdown', 'showDailyTotal']) {
   $(id).addEventListener('input', renderPreview)
 }
 renderPreview()
