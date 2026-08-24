@@ -1,0 +1,153 @@
+<!doctype html><meta charset="utf-8"><title>Kaching in Telegram</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 372px; height: 856px; }
+body {
+  font: 16px/1.4 Roboto, "Helvetica Neue", -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.phone {
+  position: relative; width: 360px; height: 844px; overflow: hidden;
+  border-radius: 30px;
+  background:
+    radial-gradient(60% 55% at 82% 12%, #dbddbb 0%, rgba(219,221,187,0) 100%),
+    radial-gradient(65% 55% at 12% 20%, #d5d88d 0%, rgba(213,216,141,0) 100%),
+    radial-gradient(70% 60% at 88% 88%, #6ba587 0%, rgba(107,165,135,0) 100%),
+    radial-gradient(70% 60% at 10% 92%, #88b884 0%, rgba(136,184,132,0) 100%),
+    #a9bd8b;
+  display: flex; flex-direction: column;
+}
+
+/* status bar */
+.status {
+  height: 30px; flex: none; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 16px;
+  font-size: 12.5px; font-weight: 600; color: #1b1d21;
+}
+.status .right { display: flex; align-items: center; gap: 5px; }
+.status svg { display: block; }
+
+/* header */
+.header {
+  flex: none; margin: 2px 6px 0; height: 54px;
+  background: #fff; border-radius: 24px;
+  display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.10);
+}
+.header .back { width: 26px; color: #6d7378; flex: none; }
+.avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex: none;
+  background: #eef3f8; display: flex; align-items: center; justify-content: center;
+}
+.avatar img { width: 26px; height: 26px; display: block; }
+.who { flex: 1; min-width: 0; }
+.who b { display: block; font-size: 16px; font-weight: 600; color: #1b1d21; letter-spacing: -.01em; }
+.who span { display: block; font-size: 12.5px; color: #8d9298; margin-top: 1px; }
+.header .dots { width: 22px; color: #6d7378; flex: none; }
+
+/* chat */
+.chat {
+  flex: 1; overflow: hidden; padding: 10px 8px 6px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
+}
+.day {
+  align-self: center; margin-bottom: 2px;
+  background: rgba(0,0,0,.16); color: #fff;
+  font-size: 12.5px; font-weight: 500; padding: 3px 11px; border-radius: 12px;
+}
+.b {
+  position: relative; max-width: 302px; align-self: flex-start;
+  background: #fff; border-radius: 14px; padding: 7px 10px 6px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.12);
+  font-size: 14.5px; line-height: 1.36; color: #1b1d21;
+  white-space: pre-wrap; word-break: break-word;
+}
+.b.out { align-self: flex-end; background: #effdde; }
+.b .t {
+  float: right; margin: 5px -1px -1px 9px;
+  font-size: 11.5px; line-height: 1; color: #a1aab3; user-select: none;
+}
+.b.out .t { color: #5ca853; }
+.b .h { font-weight: 500; }
+.b .m { color: #4c545c; }
+
+/* compose */
+.compose {
+  flex: none; margin: 4px 6px 8px; height: 48px;
+  background: #fff; border-radius: 24px;
+  display: flex; align-items: center; gap: 9px; padding: 0 12px 0 5px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.10);
+}
+.menu {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  background: #4fa9e8; color: #fff; border-radius: 20px;
+  height: 38px; padding: 0 13px 0 11px; font-size: 14.5px; font-weight: 500;
+}
+.compose .ph { flex: 1; color: #a5abb1; font-size: 15.5px; }
+.compose .ic { color: #8d9298; flex: none; }
+</style>
+<body>
+<div class="phone">
+
+  <div class="status">
+    <span>9:41</span>
+    <span class="right">
+      <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 9.6 10.9 6a4.8 4.8 0 0 0-6.8 0L7.5 9.6Z"/><path d="M7.5 9.6 13 4a7.8 7.8 0 0 0-11 0l5.5 5.6Z" opacity=".35"/></svg>
+      <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><rect x="0" y="7" width="2.6" height="5" rx=".7"/><rect x="4.1" y="5" width="2.6" height="7" rx=".7"/><rect x="8.2" y="2.7" width="2.6" height="9.3" rx=".7"/><rect x="12.3" y="0" width="2.6" height="12" rx=".7"/></svg>
+      <svg width="22" height="12" viewBox="0 0 22 12" fill="none"><rect x=".6" y=".6" width="18" height="10.8" rx="3.2" stroke="currentColor" stroke-width="1.2" opacity=".5"/><rect x="2.4" y="2.4" width="12" height="7.2" rx="1.8" fill="currentColor"/><rect x="20.2" y="4" width="1.6" height="4" rx=".8" fill="currentColor" opacity=".5"/></svg>
+    </span>
+  </div>
+
+  <div class="header">
+    <svg class="back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></svg>
+    <span class="avatar"><img src="../extension/icons/icon128.png" alt=""></span>
+    <span class="who"><b>kaching</b><span>bot</span></span>
+    <svg class="dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+  </div>
+
+  <div class="chat">
+
+    <div class="b"><span class="h">🔔 New order</span>
+Pro Unlock · pro_unlock
+<span class="m">com.example.notes · US
+USD 4.99 → KRW 5,020 est. net
+2026-08-24 10:55 GMT+9 / 2026-08-24 01:55 UTC
+GPA.1234-5678-9012-34567</span>
+Today KRW 5,020 · 1 order<span class="t">10:57</span></div>
+
+    <div class="b"><span class="h">↩️ Refund</span>
+Pro Unlock · pro_unlock
+<span class="m">com.example.notes · DE
+USD 0
+2026-08-24 13:26 GMT+9 / 2026-08-24 04:26 UTC
+GPA.2345-6789-0123-45678</span>
+Today KRW 2,010 · 1 order · 1 refund, KRW -3,010<span class="t">13:27</span></div>
+
+    <div class="b"><span class="h">🔔 New order</span>
+Pro Unlock · pro_unlock
+<span class="m">com.example.notes · DE
+EUR 8.49 → KRW 9,809 est. net
+2026-08-24 14:35 GMT+9 / 2026-08-24 05:35 UTC
+GPA.3310-8574-0188-10397</span>
+Today KRW 11,819 · 2 orders · 1 refund, KRW -3,010<span class="t">14:38</span></div>
+
+    <div class="b out">/today<span class="t">16:25</span></div>
+
+    <div class="b">Today KRW 11,819 · 2 orders · 1 refund, KRW -3,010<span class="t">16:25</span></div>
+
+  </div>
+
+  <div class="compose">
+    <span class="menu">
+      <svg width="17" height="13" viewBox="0 0 17 13" fill="currentColor"><rect y="0" width="17" height="2.4" rx="1.2"/><rect y="5.3" width="17" height="2.4" rx="1.2"/><rect y="10.6" width="17" height="2.4" rx="1.2"/></svg>
+      Menu
+    </span>
+    <svg class="ic" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" stroke-linecap="round"/><circle cx="9" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg>
+    <span class="ph">Message</span>
+    <svg class="ic" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.5 12 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></svg>
+    <svg class="ic" width="23" height="23" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M18 11a1 1 0 1 0-2 0 4 4 0 0 1-8 0 1 1 0 1 0-2 0 6 6 0 0 0 5 5.9V19H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.1a6 6 0 0 0 5-5.9Z"/></svg>
+  </div>
+
+</div>
