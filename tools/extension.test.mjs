@@ -101,10 +101,23 @@ test('minPayout of zero notifies everything, one hides free test orders', () => 
   assert.equal(matches(order(), { ...DEFAULTS, minPayout: 1 }), true)
 })
 
-test('minPayout falls back to the buyer total when no payout is settled', () => {
+test('minPayout is compared in the currency it was written in', () => {
+  // The minimum is a payout figure. An unsettled order only carries the buyer's
+  // total, so it has to be converted first — comparing USD 4.99 against a KRW
+  // minimum muted real orders, and muting a refund leaves the charge it undoes
+  // in the running total for good.
   const unsettled = order({ payout: null })
-  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 4 }), true)
-  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 5 }), false)
+  const usd = { currency: 'USD', rates: {} }
+  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 4 }, usd), true)
+  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 5 }, usd), false)
+  // Converted, USD 4.99 clears a KRW minimum it would fail as a bare number.
+  const krw = { currency: 'KRW', rates: { 'USD>KRW': 1392.9 } }
+  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 5000 }, krw), true)
+  // No rate to cross means no comparison to make, and failing to hush an order
+  // is the cheaper mistake.
+  assert.equal(matches(unsettled, { ...DEFAULTS, minPayout: 5000 }, { currency: 'KRW' }), true)
+  // A settled payout is already the right currency and needs no help.
+  assert.equal(matches(order(), { ...DEFAULTS, minPayout: 7000 }, krw), false)
 })
 
 test('time toggles select zones independently', () => {
@@ -358,24 +371,61 @@ test('an estimated net says on its own line that the rate was assumed', () => {
   assert.ok(on.includes('tax USD 0.45'), on)
   assert.ok(!on.includes('fee 15%'), on)
 })
-test('a refund is never given an estimated net', () => {
-  // Refunds arrive long before Play settles the reversal, so the estimate would
-  // fire on exactly the orders where a positive figure is most misleading.
-  const unsettled = { state: 'refunded', payout: null, net: null }
-  assert.equal(estimatedNet(order(unsettled)), null)
-  assert.equal(feeRate(order(unsettled)), null)
-  const text = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
-  assert.ok(!text.includes('est. net'), text)
-  assert.ok(!text.includes('%'), text)
-  assert.ok(text.includes('USD 4.99'), text)
-  // A settled reversal is no different: Play reporting a positive payout on a
-  // refund does not make it income, and negating it would invent a sign the
-  // response never carried.
-  assert.equal(estimatedNet(order({ state: 'refunded' })), null)
-  // A figure Play itself signs as leaving is worth showing.
+test('a refund always nets out negative, whatever sign Play put on it', () => {
+  // The state is the reversal, so the direction comes from it and only the
+  // magnitude is read out of the response. Play signing the payout either way
+  // has to reach the same figure, or the running total depends on a convention
+  // nothing here controls.
+  assert.deepEqual(estimatedNet(order({ state: 'refunded' })), { currency: 'KRW', amount: -6500 })
   assert.deepEqual(
     estimatedNet(order({ state: 'refunded', payout: { currency: 'KRW', amount: -6500 } })),
     { currency: 'KRW', amount: -6500 },
+  )
+  // A reversal Play has not settled yet still has to leave the total, so it
+  // reverses the same estimate the charge itself would have been given.
+  const unsettled = { state: 'refunded', payout: null, net: null }
+  assert.deepEqual(estimatedNet(order(unsettled)), { currency: 'USD', amount: -3.86 })
+  const text = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
+  assert.ok(text.includes('USD -3.86'), text)
+  assert.ok(text.includes('15%'), text)
+})
+
+test('a reversal lands on exactly the figure it undoes', () => {
+  // Rounding that always breaks upwards would leave a charge and its refund a
+  // minor unit apart, and the residue would sit in the total for good.
+  const half = { total: null, beforeFee: { currency: 'KRW', amount: 5903 }, tax: null, net: null, payout: null }
+  const charge = estimatedNet(order(half))
+  const back = estimatedNet(order({ ...half, state: 'refunded' }))
+  assert.equal(charge.amount + back.amount, 0)
+})
+
+test('a reversal never prints a negative zero or a rate Google never charged', () => {
+  // Both fall out of the sign: a zero-value test order is a documented case for
+  // the minimum-payout setting, and 1 - (-3.86/4.54) is 185%.
+  const free = {
+    state: 'refunded', total: { currency: 'USD', amount: 0 },
+    beforeFee: null, tax: null, net: null, payout: { currency: 'USD', amount: 0 },
+  }
+  assert.ok(Object.is(estimatedNet(order(free)).amount, 0))
+  assert.ok(describe(order(free), DEFAULTS).includes('USD 0 est. net'), describe(order(free), DEFAULTS))
+  const signed = order({ state: 'refunded', net: { currency: 'USD', amount: -3.86 } })
+  assert.deepEqual(feeRate(signed), { percent: 15, derived: true })
+})
+
+test('a minimum payout hides small orders, not reversals', () => {
+  // The minimum is about size. Comparing the signed figure put every negatively
+  // signed refund below every positive threshold, muting the one order whose
+  // whole job is to take money back out of the total.
+  const settings = { ...DEFAULTS, minPayout: '1000' }
+  assert.equal(matches(order({ payout: { currency: 'KRW', amount: 8500 } }), settings), true)
+  assert.equal(
+    matches(order({ state: 'refunded', payout: { currency: 'KRW', amount: -8500 } }), settings),
+    true,
+  )
+  // A reversal of an order too small to announce stays too small to announce.
+  assert.equal(
+    matches(order({ state: 'refunded', payout: { currency: 'KRW', amount: -10 } }), settings),
+    false,
   )
 })
 
@@ -529,7 +579,7 @@ test('totals sum a day and a month from the same buckets', () => {
   b = T.record(b, '2026-08-20', { net: krw(1000), currency: 'KRW' })
   b = T.record(b, '2026-07-31', { net: krw(9999), currency: 'KRW' })
 
-  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 })
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 })
   // Same function answers the month, so the two figures cannot drift apart.
   assert.equal(T.sum(b, '2026-08').amount, 9000)
   assert.equal(T.sum(b, '2026-08').orders, 3)
@@ -540,16 +590,90 @@ test('a total never quietly absorbs money it could not convert', () => {
   // Adding NOK to a KRW total would produce a number that looks right and is
   // not, so it is counted apart and the line says so.
   let b = T.record({}, '2026-08-19', { net: { currency: 'NOK', amount: 64.6 }, currency: 'KRW' })
-  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 0, orders: 1, refunds: 0, uncounted: 1 })
-  // A refund is counted, never added.
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 })
+  // A refund with no charge to take back out is left out of the amount the same
+  // way, and disclosed the same way: the message above it printed a figure, so
+  // the line has to say the amount does not carry it.
   b = T.record(b, '2026-08-19', { net: null, refund: true, currency: 'KRW' })
-  assert.equal(T.sum(b, '2026-08-19').refunds, 1)
-  assert.equal(T.sum(b, '2026-08-19').amount, 0)
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 })
+})
+
+test('a refund comes back out of the running total', () => {
+  // The whole point of the sign: the day's figure has to fall when money is
+  // handed back, not just carry a refund count beside an unchanged number.
+  let b = T.record({}, '2026-08-19', { net: { currency: 'KRW', amount: 6500 }, currency: 'KRW' })
+  b = T.record(b, '2026-08-19', { net: { currency: 'KRW', amount: -6500 }, refund: true, currency: 'KRW' })
+  assert.deepEqual(T.sum(b, '2026-08-19'), { currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 })
+})
+
+test('the charge ledger keeps what each charge added, and evicts the oldest', () => {
+  // A reversal takes out exactly what its charge put in, so the amount is kept
+  // beside the id — an unsettled reversal re-estimated at the default fee rate
+  // would not cancel a charge counted from Play's reported payout.
+  const krw = (amount) => ({ currency: 'KRW', amount })
+  let led = []
+  for (const [id, amount] of [['a', 10], ['b', 20], ['a', 99], ['c', 30]]) {
+    led = T.remember(led, id, krw(amount), 3)
+  }
+  assert.deepEqual(led, [['a', 10, 'KRW'], ['b', 20, 'KRW'], ['c', 30, 'KRW']])
+  assert.equal(T.amountFor(led, 'b', 'KRW'), 20)
+  assert.equal(T.amountFor(led, 'zz', 'KRW'), null)
+  // A figure counted in one payout currency is not taken out of a total kept in
+  // another.
+  assert.equal(T.amountFor(led, 'b', 'USD'), null)
+  // Already present is a no-op, not a re-append that would push out a live entry
+  // and overwrite the figure with a later estimate of the same order.
+  assert.equal(T.remember(led, 'a', krw(99), 3), led)
+  assert.deepEqual(T.remember(led, 'd', krw(40), 3), [['b', 20, 'KRW'], ['c', 30, 'KRW'], ['d', 40, 'KRW']])
+})
+
+test('a zero entry matches whatever currency the total is now kept in', () => {
+  // First sync banks the history it adopted at zero, before any rate has been
+  // learned and so before the payout currency is known. That entry still has to
+  // match, or the refund of an adopted order falls through to an estimate of
+  // money the totals never received.
+  const led = T.remember([], 'a', { currency: null, amount: 0 })
+  assert.equal(T.amountFor(led, 'a', 'KRW'), 0)
+})
+
+test('startedAt reads the day counting began off the buckets', () => {
+  // The ledger shipped after the totals did, so this is what tells a refund of a
+  // charge counted by the older build from a refund of history nothing counted.
+  assert.equal(T.startedAt({}), null)
+  assert.equal(
+    T.startedAt({ '2026-08-19': {}, '2026-07-31': {}, '2026-08-01': {} }),
+    Date.UTC(2026, 6, 31),
+  )
+})
+
+test('a correction moves the amount and leaves the counts alone', () => {
+  // It corrects money the tally got wrong, not an order it failed to see, so
+  // inventing an order would make the count disagree with the messages sent.
+  const day = { '2026-08-19': { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } }
+  const down = T.adjust({}, '2026-08-19', { currency: 'KRW', amount: -6500 })
+  assert.deepEqual(T.sum(down, '2026-08-19'), { currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0 })
+  // Both directions, and read together with what was announced.
+  const up = T.adjust(down, '2026-08-19', { currency: 'KRW', amount: 500 })
+  const both = T.combine(T.sum(day, '2026-08-19'), T.sum(up, '2026-08-19'))
+  assert.deepEqual(both, { currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 })
+  // A correction in another currency is refused rather than added across.
+  assert.equal(T.adjust(up, '2026-08-19', { currency: 'USD', amount: 5 }), null)
+})
+
+test('combine never adds a correction across currencies', () => {
+  // Same rule the buckets already follow for orders: a figure that looks right
+  // and is not is worse than one the line admits it could not use.
+  const announced = { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 }
+  const crossed = { currency: 'USD', amount: 5, orders: 0, refunds: 0, refunded: 0, uncounted: 0 }
+  assert.deepEqual(T.combine(announced, crossed), { ...announced, uncounted: 1 })
+  // Nothing to add is not a currency clash.
+  const none = { currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0 }
+  assert.deepEqual(T.combine(announced, none), announced)
 })
 
 test('buckets are bounded so a year of history cannot grow without limit', () => {
   const many = Object.fromEntries(
-    Array.from({ length: 5 }, (_, i) => [`2026-01-0${i + 1}`, { currency: 'KRW', amount: i, orders: 1, refunds: 0, uncounted: 0 }]),
+    Array.from({ length: 5 }, (_, i) => [`2026-01-0${i + 1}`, { currency: 'KRW', amount: i, orders: 1, refunds: 0, refunded: 0, uncounted: 0 }]),
   )
   const kept = T.trim(many, 3)
   // Oldest dropped, newest kept — ISO keys sort chronologically, which is the
@@ -572,14 +696,31 @@ test('one formatter draws both the footer and the /today answer', () => {
   // Nothing yet is nothing to say under an order; the query path supplies its
   // own zero line instead.
   assert.equal(totalLine('totalToday', { currency: null, amount: 0, orders: 0, refunds: 0, uncounted: 0 }), null)
+  // Unless a correction put an amount there with nothing announced behind it.
+  assert.equal(
+    totalLine('totalDay', { currency: 'KRW', amount: -6500, orders: 0, refunds: 0, uncounted: 0 }),
+    'KRW -6,500 · 0 orders',
+  )
   assert.equal(totalLine('totalToday', null), null)
-  assert.ok(totalLine('totalToday', { ...totals, uncounted: 2 }).endsWith('2 not converted'))
+  assert.ok(totalLine('totalToday', { ...totals, uncounted: 2 }).endsWith('2 not in the total'))
 })
 
 test('English counts read right at one, not "1 orders"', () => {
   // The default footer means the first order of every single day would have
   // shown it — chrome.i18n has no plural forms, so the singular is its own key.
   const one = { currency: 'KRW', amount: 5020, orders: 1, refunds: 1, uncounted: 0 }
+  // With what the refund was worth, once the bucket carries it: a count on its
+  // own cannot tell a test purchase from the month's biggest sale.
+  assert.equal(
+    totalLine('totalToday', { ...one, refunded: -6500 }),
+    'Today KRW 5,020 · 1 order · 1 refund, KRW -6,500',
+  )
+  assert.equal(
+    totalLine('totalToday', { ...one, refunds: 2, refunded: -11520 }),
+    'Today KRW 5,020 · 1 order · 2 refunds, KRW -11,520',
+  )
+  // A bucket written before the field existed still reads, without an amount.
+  assert.equal(totalLine('totalToday', one), 'Today KRW 5,020 · 1 order · 1 refund')
   assert.equal(totalLine('totalToday', one), 'Today KRW 5,020 · 1 order · 1 refund')
   assert.equal(totalLine('totalMonth', one), 'This month KRW 5,020 · 1 order · 1 refund')
 })

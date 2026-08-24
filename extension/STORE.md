@@ -35,8 +35,10 @@ phone beyond Telegram itself.
 - Order ID
 - Time in your local zone, in UTC, or both
 - What the day has brought in so far, as a footer. Send the bot `/today`,
-  `/week` or `/month` at any point — all three sit in the bot's command menu —
-  and it answers within seconds
+  `/week` or `/month` at any point — they sit in the bot's command menu — and it
+  answers within seconds
+- `/recount` works a day out again from Play and writes the result back, and
+  `/adjust -6500` patches a day by hand, either direction, any day
 
 **What you can control**
 

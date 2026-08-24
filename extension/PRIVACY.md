@@ -16,7 +16,7 @@ operator other than you.
 | Your Google Play Console session cookie (`SAPISID`) | To sign the request to Play's own orders endpoint, exactly as the Console page does | Never leaves your browser. It is used to compute a one-way hash sent to Google only. |
 | Order records from your Play Console (order ID, product, package name, buyer country, amount, timestamp, state) | To build the notification | Sent only to the Telegram bot **you** configured |
 | Your Telegram bot token and chat ID | To deliver the notification | Stored locally in the browser; sent only to `api.telegram.org` |
-| Messages sent to your bot | To answer `/today`, `/week` and `/month` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
+| Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount` and `/adjust` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
 
 ## What it does not do
 
@@ -26,11 +26,13 @@ operator other than you.
   opening the Console yourself) and the Telegram bot you chose.
 - No data is sold, rented, or shared. No advertising.
 - Individual order records are not retained. What is kept locally is a rolling
-  list of recently seen order IDs (so the same order is not announced twice), a
-  per-day tally of amounts, order counts and refund counts holding roughly a
-  year of days, the exchange rates read off your own settled orders, the
-  currency you are paid in, and the name and ID of chats that have messaged your
-  bot. None of it leaves your machine.
+  list of recently seen order IDs (so the same order is not announced twice and
+  so a refund can be matched to the charge it reverses), a per-day tally of
+  amounts, order counts and refund counts holding roughly a year of days and the
+  day that tally began, any corrections you entered with `/adjust`, the exchange
+  rates read off your own settled orders, the currency you are paid in, and the
+  name and ID of chats that have messaged your bot. None of it leaves
+  your machine.
 
 ## Where data is stored
 

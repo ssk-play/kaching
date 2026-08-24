@@ -21,6 +21,8 @@
   .check { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; font-weight: 600; }
   .check input { width: auto; }
   .hint { font-size: .85em; opacity: .65; margin-top: .3rem; }
+  .paired { display: flex; gap: .5rem; }
+  .paired button { white-space: nowrap; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 2rem; }
   button {
     padding: .5rem 1rem; font: inherit; cursor: pointer; border-radius: 6px;
@@ -72,8 +74,11 @@
 <h2 data-i18n="secSource"></h2>
 
 <label class="field" for="consoleUrl" data-i18n="lblConsoleUrl"></label>
-<input id="consoleUrl" type="url" autocomplete="off" spellcheck="false"
-       placeholder="https://play.google.com/console/u/0/developers/1234567890/orders" />
+<div class="paired">
+  <input id="consoleUrl" type="url" autocomplete="off" spellcheck="false"
+         placeholder="https://play.google.com/console/u/0/developers/1234567890/orders" />
+  <button id="openConsole" data-i18n="btnOpenConsole"></button>
+</div>
 <div class="hint" data-i18n="hintConsoleUrl"></div>
 
 <h2 data-i18n="secFilter"></h2>
