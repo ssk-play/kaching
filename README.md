@@ -13,14 +13,34 @@ com.example.app · KR
 USD 4.99 → KRW 5,020 est. net
 2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC
 GPA.1234-5678-9012-34567
-Today KRW 18,740 · 4 orders
+Today KRW 12,240 · 3 orders · 1 refund, KRW -6,500
 ```
 
-Send the bot `/today`, `/week` (from Sunday) or `/month` — all three appear in
-the bot's own command menu, so there is nothing to memorise.
+Send the bot `/today`, `/week` (from Sunday) or `/month` — they appear in the
+bot's own command menu, so there is nothing to memorise.
 Answers come back within a second or two: a separate one-minute alarm holds a
 long poll open on Telegram, so a command is usually waited for rather than
 looked for.
+
+The tally is written one message at a time, so two commands exist for the day you
+notice it is wrong. `/recount` works a day out again from Play and **writes the
+result back**, so `/today` changes with it. `/adjust` patches a day by hand
+instead:
+
+```
+/recount                      set today to what Play says it was
+/recount 2026-08-20           an earlier day
+/adjust -6500                 today, down by 6,500
+/adjust +5000                 today, up by 5,000
+/adjust 2026-08-20 -6500      an earlier day
+```
+
+An order is filed under the date Play stamped it, which is what lets `/recount`
+speak about the same day the tally does. The recount counts only orders the bot
+already announced, so one still on its way is not counted twice, and a day it
+finds nothing for is reported and left alone. `/adjust` keeps its corrections
+apart from the tally and they are read together with it — until a `/recount` of
+that day supersedes them.
 
 ## Settings
 

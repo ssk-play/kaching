@@ -107,6 +107,9 @@
   "btnCheckNow": {
     "message": "Check now"
   },
+  "btnOpenConsole": {
+    "message": "Open"
+  },
   "btnReset": {
     "message": "Reset history"
   },
@@ -267,7 +270,7 @@
     "message": "$1 refunds"
   },
   "totalUncounted": {
-    "message": "$1 not converted"
+    "message": "$1 not in the total"
   },
   "lblDailyTotal": {
     "message": "Show the day's running total"
@@ -276,7 +279,49 @@
     "message": "Adds a footer to every order message with what the day has announced so far. The bot answers /today and /month either way; this only controls the footer."
   },
   "cmdHelp": {
-    "message": "Send /today, /week or /month for a running total."
+    "message": "Send /today, /week or /month for a running total. /recount works a day out again from Play; /adjust corrects one by hand."
+  },
+  "totalDay": {
+    "message": "$1 · $2 orders"
+  },
+  "totalDayOne": {
+    "message": "$1 · $2 order"
+  },
+  "totalRecount": {
+    "message": "Recounted from Play $1 · $2 orders"
+  },
+  "totalRecountOne": {
+    "message": "Recounted from Play $1 · $2 order"
+  },
+  "totalRecountCapped": {
+    "message": "first $1 orders only"
+  },
+  "totalRecountMoved": {
+    "message": "was $1"
+  },
+  "totalRecountSame": {
+    "message": "already matched"
+  },
+  "totalRecountUntouched": {
+    "message": "nothing announced for that day, so it was left alone"
+  },
+  "cmdAdjust": {
+    "message": "Correct a day's total by an amount, + or -"
+  },
+  "cmdAdjustUsage": {
+    "message": "Send an amount with it: /adjust -6500, or /adjust 2026-08-20 -6500 for an earlier day. In $1."
+  },
+  "cmdRecount": {
+    "message": "Work a day out again from Play, by charge date"
+  },
+  "cmdRecountUsage": {
+    "message": "That day is outside what Play will return here. Try /recount or /recount with a day inside the last $1."
+  },
+  "logAdjust": {
+    "message": "$1 corrected by $2"
+  },
+  "logRecount": {
+    "message": "$1 recounted from Play"
   },
   "logAnswered": {
     "message": "Answered $1"
@@ -289,6 +334,12 @@
   },
   "totalRefundsOne": {
     "message": "$1 refund"
+  },
+  "totalRefundsAt": {
+    "message": "$1 refunds, $2"
+  },
+  "totalRefundsAtOne": {
+    "message": "$1 refund, $2"
   },
   "logMenu": {
     "message": "Registered the bot command menu"

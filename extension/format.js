@@ -65,8 +65,15 @@ function taxable(order) {
   // Tax that cannot be subtracted would leave the fee applied to a base that
   // still contains it, printed next to the very tax line the breakdown exists
   // to let the reader check against. No figure beats one that does not add up.
+  //
+  // Magnitudes: a reversal can arrive with the total signed and the tax not, and
+  // subtracting the two as given would make the base larger than the order ever
+  // was. The fee base is a size; netBefore puts the direction back.
   return order.total.currency === order.tax.currency
-    ? { currency: order.total.currency, amount: order.total.amount - order.tax.amount }
+    ? {
+        currency: order.total.currency,
+        amount: Math.abs(order.total.amount) - Math.abs(order.tax.amount),
+      }
     : null
 }
 
@@ -84,7 +91,14 @@ function round(amount, currency) {
     // An unrecognised currency code is not worth losing the figure over.
   }
   const scale = 10 ** digits
-  return Math.round(amount * scale) / scale
+  // Rounded on the magnitude so a reversal lands on exactly the figure it
+  // undoes: Math.round breaks .5 upwards, which would leave a charge and its
+  // refund a minor unit apart and a residue behind in the running total. The
+  // sign is put back by hand rather than by Math.sign, which would hand back a
+  // negative zero that prints as "-0".
+  const out = Math.round(Math.abs(amount) * scale) / scale
+  if (out === 0) return 0
+  return amount < 0 ? -out : out
 }
 
 // Reported figures first; the estimate only fills the gap. Both are labelled as
@@ -109,14 +123,18 @@ export function estimatedNet(order, fx = {}) {
 // Before any conversion: what Play reported, or the estimate standing in for it.
 function netBefore(order) {
   const reported = reportedNet(order)
-  // A refund is money leaving. A positive figure under a "Refund" heading reads
-  // as income whether it was estimated or reported, and Play's own sign is the
-  // only thing that can say otherwise — so a positive one is dropped rather
-  // than negated into a number nothing in the response supports.
-  if (order.state === 'refunded') return reported?.amount < 0 ? reported : null
-  if (reported) return reported
   const base = taxable(order)
-  return base ? { currency: base.currency, amount: base.amount * (1 - DEFAULT_FEE) } : null
+  const raw =
+    reported ?? (base ? { currency: base.currency, amount: base.amount * (1 - DEFAULT_FEE) } : null)
+  if (!raw) return null
+  // A refund is money leaving, whatever sign Play put on the figure. The state
+  // is the reversal, so the direction is known from it and only the magnitude
+  // has to be read out of the response. Dropping a positive figure instead kept
+  // the sign beyond reproach and left the running total counting the refund as
+  // nothing at all — and the total is the number the reader acts on.
+  return order.state === 'refunded'
+    ? { currency: raw.currency, amount: -Math.abs(raw.amount) }
+    : raw
 }
 
 // Google's cut is not a fixed number — 15% or 30% depending on the programme —
@@ -127,7 +145,9 @@ export function feeRate(order, fx = {}) {
   const before = order.beforeFee?.amount
   const after = order.net?.amount
   if (before && after != null) {
-    return { percent: Math.round((1 - after / before) * 100), derived: true }
+    // Magnitudes: on a reversal Play may sign either figure, and 1 - (-3.86/4.54)
+    // is 185% — a rate Google has never charged anyone.
+    return { percent: Math.round((1 - Math.abs(after) / Math.abs(before)) * 100), derived: true }
   }
   // A reported figure with nothing to derive the rate from stays unexplained
   // rather than being attributed to a rate it may not have been charged.
@@ -213,14 +233,21 @@ export const label = (settings, text) =>
 // /month. One formatter for both, so the number the chat reports on request can
 // never disagree with the one it volunteered.
 export function totalLine(key, totals) {
-  if (!totals || (!totals.orders && !totals.refunds)) return null
+  // An amount with no orders behind it is a day that was corrected by hand and
+  // announced nothing; the figure is the whole point of the line, so it prints.
+  if (!totals || (!totals.orders && !totals.refunds && !totals.amount)) return null
   const amount = totals.currency ? money({ currency: totals.currency, amount: totals.amount }) : ''
   // chrome.i18n has no plural forms, so the singular is its own key. Korean
   // needs none and points both at the same text.
-  const n = (k, count) => t(count === 1 ? `${k}One` : k, count)
+  const n = (k, count, ...rest) => t(count === 1 ? `${k}One` : k, count, ...rest)
+  // What the refunds were worth, where that is known — a count on its own leaves
+  // the reader unable to tell a test purchase from the month's biggest sale.
+  const back = totals.refunded
+    ? n('totalRefundsAt', totals.refunds, money({ currency: totals.currency, amount: totals.refunded }))
+    : n('totalRefunds', totals.refunds)
   return [
     t(totals.orders === 1 ? `${key}One` : key, amount || '—', totals.orders),
-    totals.refunds ? n('totalRefunds', totals.refunds) : '',
+    totals.refunds ? back : '',
     // Silence here would let a currency this has never been able to convert
     // quietly shrink the total, which is the one way a running figure lies.
     totals.uncounted ? t('totalUncounted', totals.uncounted) : '',

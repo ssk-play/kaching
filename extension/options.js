@@ -75,7 +75,9 @@ const SAMPLE = {
 
 // A day already under way, so the footer shows what it will actually look like
 // rather than the single-order case.
-const SAMPLE_DAY = { currency: 'KRW', amount: 18740, orders: 4, refunds: 0, uncounted: 0 }
+const SAMPLE_DAY = {
+  currency: 'KRW', amount: 12240, orders: 3, refunds: 1, refunded: -6500, uncounted: 0,
+}
 
 const renderPreview = () => {
   const s = read()
@@ -150,6 +152,14 @@ $('checkNow').addEventListener('click', async () => {
 $('reset').addEventListener('click', async () => {
   const res = await ask('reset')
   say(res.ok ? t('msgResetDone') : res.error, res.ok ? 'ok' : 'err')
+})
+
+// Opens whatever the field currently resolves to, not what was last saved — the
+// point is to check the URL you just pasted. With nothing usable in it, the
+// Console's own front page is where the URL is found in the first place.
+$('openConsole').addEventListener('click', () => {
+  const id = developerIdFrom($('consoleUrl').value.trim())
+  chrome.tabs.create({ url: id ? consoleUrlFor(id) : 'https://play.google.com/console/' })
 })
 
 $('showStatus').addEventListener('click', showStatus)

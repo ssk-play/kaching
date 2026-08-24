@@ -7,7 +7,9 @@ import { plan } from './filters.js'
 import { describe, label, estimatedNet, totalLine } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
 import {
-  record as tally, sum as sumTotals, sumRange, trim as trimTotals, dayKey, monthKey, weekStart,
+  record as tally, sum as sumTotals, sumRange, trim as trimTotals,
+  remember as rememberCharge, amountFor, startedAt, adjust, combine,
+  dayKey, monthKey, weekStart,
 } from './totals.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
@@ -189,7 +191,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       // through the old account's currency.
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
-        rates: {}, payoutCurrency: null, totals: {},
+        rates: {}, payoutCurrency: null, totals: {}, adjustments: {},
+        counted: [], countedSince: 0,
       })
       badge('', '#9e9e9e')
       await record('info', 'logReset')
@@ -254,7 +257,7 @@ async function waitForCommands(s) {
   // instead.
   await rememberChats(chatsIn(list))
 
-  const { totals } = await chrome.storage.local.get({ totals: {} })
+  const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
   const today = dayKey(Date.now())
   // Only moves past what was actually dealt with. A reply lost to a 429 or a
   // dropped connection is left unacknowledged so the next poll tries again,
@@ -262,21 +265,27 @@ async function waitForCommands(s) {
   let done = from
   for (const u of list) {
     const chat = u.message?.chat
-    // Anyone can message a bot whose username they know. Only the configured
-    // chat gets told what this account earns.
-    // Anyone can message a bot whose username they know. Nothing to answer is
-    // still something dealt with, so the cursor moves past it either way.
-    const cmd =
-      chat && String(chat.id) === String(s.chatId)
-        ? // "/month@somebot" is what Telegram delivers in a group.
-          String(u.message.text ?? '').trim().toLowerCase().split(/[@\s]/)[0]
-        : ''
+    // Anyone can message a bot whose username they know. Only the configured chat
+    // gets told what this account earns — and nothing to answer is still something
+    // dealt with, so the cursor moves past it either way.
+    const said = chat && String(chat.id) === String(s.chatId) ? String(u.message.text ?? '') : ''
+    // "/month@somebot" is what Telegram delivers in a group, and /adjust and
+    // /recount carry their arguments after the command itself.
+    const [head = '', ...rest] = said.trim().split(/\s+/)
+    const cmd = head.toLowerCase().split('@')[0]
+    const arg = rest.join(' ')
     const key = SPANS[cmd]
     const reply = key
-      ? totalLine(key, spanOf(totals, key, today)) ?? t(key, '—', 0)
-      : cmd === '/start' || cmd === '/help'
-        ? t('cmdHelp')
-        : null
+      ? totalLine(key, spanOf(totals, adjustments, key, today)) ?? t(key, '—', 0)
+      : cmd === '/adjust'
+        ? await applyCorrection(arg)
+        : cmd === '/recount'
+          ? // A fetch of its own, so an expired Console session says so here
+            // rather than answering with a silent zero.
+            await recount(s, arg).catch((err) => t('tgFailOther', String(err?.message ?? err)))
+          : cmd === '/start' || cmd === '/help'
+            ? t('cmdHelp')
+            : null
     if (reply) {
       // Only a reply that actually landed is logged as answered, and only then
       // is the command written off. The log is the one diagnostic surface here;
@@ -298,9 +307,156 @@ async function waitForCommands(s) {
 const SPANS = { '/today': 'totalToday', '/week': 'totalWeek', '/month': 'totalMonth' }
 
 // A week straddles months, so it is a range where the other two are prefixes.
-function spanOf(totals, key, today) {
-  if (key === 'totalWeek') return sumRange(totals, weekStart(today), today)
-  return sumTotals(totals, key === 'totalToday' ? today : monthKey(today))
+function span(buckets, key, today) {
+  if (key === 'totalWeek') return sumRange(buckets, weekStart(today), today)
+  return sumTotals(buckets, key === 'totalToday' ? today : monthKey(today))
+}
+
+// Announced orders plus hand-entered corrections. Every answer goes through this,
+// so a correction cannot show up in one figure and not another.
+const spanOf = (totals, adjustments, key, today) =>
+  combine(span(totals, key, today), span(adjustments, key, today))
+
+const dayOf = (totals, adjustments, day) =>
+  combine(sumTotals(totals, day), sumTotals(adjustments, day))
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+// Both commands take an optional day ahead of everything else, because a tally
+// that cannot go back is no use on the day you notice it was wrong.
+function dayArg(arg, today) {
+  const parts = String(arg).trim().split(/\s+/).filter(Boolean)
+  const day = DAY.test(parts[0] ?? '') ? parts.shift() : today
+  // A day that has not happened cannot be corrected or recounted, and would leave
+  // a bucket ahead of today rolling into the month.
+  return day <= today ? { day, rest: parts.join(' ') } : null
+}
+
+// "+5000", "-6,500", "6500" — a bare figure reads as money coming in. Zero is
+// turned away rather than acknowledged, since nothing about the total would move.
+function signedAmount(text) {
+  const cleaned = String(text).replace(/[,_\s]/g, '')
+  if (!/^[+-]?\d+(\.\d+)?$/.test(cleaned)) return null
+  const amount = Number(cleaned)
+  return Number.isFinite(amount) && amount !== 0 ? amount : null
+}
+
+const dayLine = (day, today, figures) =>
+  day === today
+    ? totalLine('totalToday', figures) ?? t('totalToday', '—', 0)
+    : `${day} ${totalLine('totalDay', figures) ?? t('totalDay', '—', 0)}`
+
+// The tally is written one message at a time and cannot go back: a refund already
+// announced, or one this never saw at all, is money it has no other way of
+// losing. So the reader can put it in by hand — either direction, any day.
+//
+// Written to its own store, never to the buckets. A poll in flight holds a copy of
+// those and writes it back after every send, which would take a correction
+// entered in the meantime straight back out.
+async function applyCorrection(arg) {
+  const today = dayKey(Date.now())
+  const { totals, adjustments, payoutCurrency: paid } = await chrome.storage.local.get({
+    totals: {}, adjustments: {}, payoutCurrency: null,
+  })
+  const asked = dayArg(arg, today)
+  const amount = asked && signedAmount(asked.rest)
+  const currency = totals[asked?.day]?.currency ?? adjustments[asked?.day]?.currency ?? paid
+  if (!amount) return t('cmdAdjustUsage', currency ?? '—')
+
+  const epoch = resetEpoch
+  const next = adjust(adjustments, asked.day, { currency, amount })
+  // Only reachable if the payout currency changed under a day already carrying a
+  // correction; there is nothing sensible to add across the two.
+  if (!next) return t('cmdAdjustUsage', adjustments[asked.day].currency)
+  if (epoch === resetEpoch) await chrome.storage.local.set({ adjustments: trimTotals(next) })
+  await record(
+    'info', 'logAdjust', asked.day, `${amount > 0 ? '+' : ''}${amount} ${currency ?? ''}`.trim(),
+  )
+  return dayLine(asked.day, today, dayOf(totals, next, asked.day))
+}
+
+// Enough of a page that a day's worth of orders is not quietly truncated, and no
+// further back than Play will answer for.
+const RECOUNT_PAGE = 200
+const RECOUNT_MAX_DAYS = 30
+
+// Worked out from Play instead of read off the tally, for the same reason the
+// correction exists: the tally never revisits what it already said.
+//
+// Filed by the day Play stamps the order rather than the day anything was
+// announced, and a refund counts against that day — a day whose one order is a
+// refund answers a negative figure, which is what it was. No ledger is consulted,
+// so this works for days that predate one; that makes it a second opinion rather
+// than a correction to /today, which answers what this told you.
+async function recount(s, arg) {
+  const today = dayKey(Date.now())
+  const asked = dayArg(arg, today)
+  const days =
+    asked &&
+    Math.ceil(
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${asked.day}T00:00:00Z`)) / 86_400_000,
+    ) + 2
+  if (!asked || !(days <= RECOUNT_MAX_DAYS)) return t('cmdRecountUsage', RECOUNT_MAX_DAYS)
+
+  const epoch = resetEpoch
+  const all = await fetchOrders({ developerId: s.developerId, days, pageSize: RECOUNT_PAGE })
+  const fx = await exchange(all, epoch)
+  const st = await state()
+  // Only what was announced. An order still on its way to the chat is counted
+  // when it gets there, and including it here would have it land twice.
+  const announced = new Set([...st.seen, ...st.delivered])
+
+  let buckets = {}
+  for (const o of all) {
+    if (!TERMINAL_STATES.has(o.state) || dayKey(o.at) !== asked.day) continue
+    if (!announced.has(keyFor(o))) continue
+    buckets = tally(buckets, asked.day, {
+      net: estimatedNet(o, fx),
+      refund: o.state === 'refunded',
+      currency: fx.currency,
+    })
+  }
+
+  const figures = sumTotals(buckets, asked.day)
+  const moved = await restate(asked.day, figures, epoch)
+  await record('info', 'logRecount', asked.day, moved.note)
+
+  const line = totalLine('totalRecount', figures) ?? t('totalRecount', '—', 0)
+  const parts = [asked.day === today ? line : `${asked.day} ${line}`, moved.said]
+  // A full page means Play had at least this many to give and may have had more;
+  // a figure that might be missing orders has to say so.
+  if (all.length >= RECOUNT_PAGE) parts.push(t('totalRecountCapped', RECOUNT_PAGE))
+  return parts.filter(Boolean).join(' · ')
+}
+
+// The day is set to what Play says it was, and any correction entered by hand for
+// it is dropped: a correction exists to patch a figure the tally got wrong, and
+// there is nothing left to patch. Only the one day is touched.
+//
+// A day the recount found nothing for is reported and left alone. Zeroing a day on
+// the strength of an empty answer is the one way this could destroy a figure it
+// cannot rebuild.
+//
+// A poll in flight holds its own copy of the buckets and writes it back after
+// every send, so it is waited out first — otherwise it would put the old figure
+// straight back.
+async function restate(day, figures, epoch) {
+  if (!figures.orders && !figures.refunds) return { said: t('totalRecountUntouched'), note: '' }
+  await inflight?.catch(() => {})
+  if (epoch !== resetEpoch) return { said: t('totalRecountUntouched'), note: '' }
+
+  const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
+  const before = dayOf(totals, adjustments, day).amount
+  const { [day]: dropped, ...rest } = adjustments
+  await chrome.storage.local.set({
+    totals: trimTotals({ ...totals, [day]: figures }),
+    ...(dropped ? { adjustments: rest } : {}),
+  })
+
+  const amount = figures.amount - before
+  if (!amount) return { said: t('totalRecountSame'), note: '0' }
+  const signed = `${amount > 0 ? '+' : ''}${amount}`
+  return { said: t('totalRecountMoved', signed), note: signed }
 }
 
 // A short list, newest last, of chats that have talked to this bot. It exists so
@@ -370,10 +526,14 @@ async function onSuccess(s, all) {
       ? chrome.storage.local.set({ seen: [...seen].slice(-MAX_SEEN), delivered: [], ...extra })
       : Promise.resolve()
 
-  const { batch, overflow, muted, freshCount, unseenCount } = plan(terminal, seen, s, MAX_MESSAGES)
   // Read off the whole fetch, not just what is being announced: a pending order
-  // converts on the back of settled ones this run will never mention.
+  // converts on the back of settled ones this run will never mention. Read before
+  // the split, because the minimum-payout filter is written in this currency.
   const fx = await exchange(all, epoch)
+
+  const { batch, overflow, muted, freshCount, unseenCount } = plan(
+    terminal, seen, s, MAX_MESSAGES, fx,
+  )
 
   if (!st.bootstrapped) {
     // First run adopts what is already there. Announcing history would train the
@@ -386,8 +546,18 @@ async function onSuccess(s, all) {
       // tries again rather than adopting history the user was never told about.
       return onFailure(s, delivery(err))
     }
-    for (const o of terminal) seen.add(keyFor(o))
-    await write({ bootstrapped: true, fails: 0, lastOkAt: Date.now() })
+    // Adopted, not counted — the totals start empty. Banked at zero so a refund
+    // of any of this has a definite match to find and takes nothing back out,
+    // rather than falling through to an estimate of money that never arrived.
+    let adopted = []
+    for (const o of terminal) {
+      seen.add(keyFor(o))
+      adopted = rememberCharge(adopted, o.id, { currency: fx.currency, amount: 0 })
+    }
+    await write({
+      bootstrapped: true, fails: 0, lastOkAt: Date.now(),
+      counted: adopted, countedSince: Date.now(),
+    })
     await record('info', 'logFirstSync', terminal.length)
     badge('', '#4caf50')
     return { bootstrapped: terminal.length }
@@ -401,33 +571,84 @@ async function onSuccess(s, all) {
   // costs almost nothing, and a worker death loses at most the single order
   // whose send had already landed.
   const journal = []
-  let buckets = (await chrome.storage.local.get({ totals: {} })).totals
+  const {
+    totals: storedTotals, counted, countedSince, adjustments: corrections,
+  } = await chrome.storage.local.get({
+    totals: {}, counted: [], countedSince: 0, adjustments: {},
+  })
+  let buckets = storedTotals
+  let charged = counted
+
+  // The ledger arrived after the totals did, so an install that was already
+  // counting has no entry for the charges it counted before. The oldest bucket is
+  // the day counting started, which is what separates those from history that was
+  // never counted at all.
+  let since = countedSince
+  if (!since) {
+    since = startedAt(buckets) ?? Date.now()
+    if (epoch === resetEpoch) await chrome.storage.local.set({ countedSince: since })
+  }
   const note = (o) => {
     journal.push(keyFor(o))
     // Totals ride on the same write as the journal, so an order can never be
     // counted twice: whatever survives a worker death is exactly what was
     // already delivered.
     return epoch === resetEpoch
-      ? chrome.storage.local.set({ delivered: journal, totals: buckets })
+      ? chrome.storage.local.set({ delivered: journal, totals: buckets, counted: charged })
       : Promise.resolve()
+  }
+
+  // Whether an order's money actually reaches the amount rather than being
+  // tallied as unconverted. Only that may be vouched for: remembering a charge
+  // that added nothing would have its refund subtract a figure no bucket ever
+  // received.
+  const lands = (o) => {
+    const net = estimatedNet(o, fx)
+    return Boolean(net && fx.currency && net.currency === fx.currency)
+  }
+
+  // A page carries each order once, under whatever state it is in now, so a
+  // charge and its own reversal normally arrive in different runs. Should one run
+  // hold both, it has to net to zero whichever is reached first — and plan()
+  // hands the overflow tail back newest-first — so this run's own charges count
+  // as matches alongside the stored ones.
+  const here = new Map(
+    [...batch, ...overflow]
+      .filter((o) => o.state !== 'refunded' && lands(o))
+      .map((o) => [o.id, estimatedNet(o, fx).amount]),
+  )
+
+  // Exactly what the charge put in, negated. With no entry to go on — a charge
+  // counted before the ledger existed — the estimate stands in, but only for a
+  // charge from after counting started: older than that and nothing was ever
+  // added for it to take back out.
+  const reversal = (o) => {
+    const added = amountFor(charged, o.id, fx.currency) ?? here.get(o.id) ?? null
+    if (added != null) return { currency: fx.currency, amount: -added }
+    return o.at >= since ? estimatedNet(o, fx) : null
   }
 
   // Counted before the message is rendered, so the footer includes the order it
   // is attached to. Muted orders are left out on purpose — a total the reader
   // cannot reconcile against the messages they were sent is worse than none.
   //
-  // Filed under the day it is announced, not the day Play stamped it. The two
-  // differ only for an order that surfaced late or crossed midnight, and filing
-  // by the charge date would drop such an order out of the very footer attached
-  // to it — a running tally the reader cannot follow line by line is no use to
-  // them. It is a tally of what this told you, and says so.
+  // Filed under the day Play stamped the order, not the day it was announced. The
+  // two differ only for an order that surfaced late or crossed midnight, and that
+  // order does then miss the footer attached to it — but /recount answers by the
+  // stamped day, and a figure that cannot be checked against Play is worth less
+  // than one that misses a midnight straggler.
+  //
+  // A reversal may only take out what a charge put in, so a refund with no charge
+  // to match is left out of the amount and disclosed as such: driving the day
+  // negative for money the tally never saw arrive is the worse answer. The entry
+  // is banked on the same write as the bucket it went into, so a run that dies
+  // half-way cannot leave a charge vouched for that was never counted.
   const count = (o) => {
+    const refund = o.state === 'refunded'
+    const net = refund ? reversal(o) : estimatedNet(o, fx)
+    if (!refund && lands(o)) charged = rememberCharge(charged, o.id, net)
     buckets = trimTotals(
-      tally(buckets, dayKey(Date.now()), {
-        net: estimatedNet(o, fx),
-        refund: o.state === 'refunded',
-        currency: fx.currency,
-      }),
+      tally(buckets, dayKey(o.at), { net, refund, currency: fx.currency }),
     )
   }
 
@@ -435,7 +656,7 @@ async function onSuccess(s, all) {
     for (const o of batch) {
       count(o)
       const footer = s.showDailyTotal
-        ? totalLine('totalToday', sumTotals(buckets, dayKey(Date.now())))
+        ? totalLine('totalToday', spanOf(buckets, corrections, 'totalToday', dayKey(Date.now())))
         : null
       const text = [describe(o, s, fx), footer].filter(Boolean).join('\n')
       await sendTelegram(s.botToken, s.chatId, text)

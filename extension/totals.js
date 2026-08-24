@@ -31,20 +31,27 @@ export function weekStart(key) {
   return day.toISOString().slice(0, 10)
 }
 
-const empty = () => ({ currency: null, amount: 0, orders: 0, refunds: 0, uncounted: 0 })
+const empty = () => ({
+  currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
+})
 
 // Only money already in the developer's own currency is summed. An order whose
 // currency pair has never been observed cannot be converted, and quietly adding
-// NOK to a KRW total would produce a number that looks right and is not — so it
-// is counted as uncounted instead, and the total says so.
+// NOK to a KRW total would produce a number that looks right and is not. Same for
+// a refund with no charge to take back out. Either way the message above printed
+// a figure the amount does not carry, so it is counted apart and the line says so.
 export function record(buckets, key, { net, refund, currency }) {
-  const prev = buckets[key] ?? empty()
+  // Merged onto a fresh shape rather than used as-is: a bucket written by an
+  // older version is missing fields added since, and += on undefined is NaN.
+  const prev = { ...empty(), ...buckets[key] }
   const next = { ...prev, currency: prev.currency ?? currency ?? null }
   if (refund) next.refunds += 1
   else next.orders += 1
   if (net && currency && net.currency === currency) next.amount += net.amount
-  else if (net) next.uncounted += 1
-  else if (!refund) next.uncounted += 1
+  else next.uncounted += 1
+  // How much of the amount was money going back out. Carried apart so the line
+  // can say what the refunds were worth, not just how many there were.
+  if (refund && net && net.currency === currency) next.refunded += net.amount
   return { ...buckets, [key]: next }
 }
 
@@ -65,9 +72,77 @@ function fold(buckets, wanted) {
     out.amount += b.amount
     out.orders += b.orders
     out.refunds += b.refunds
+    out.refunded += b.refunded ?? 0
     out.uncounted += b.uncounted
   }
   return out
+}
+
+// What each charge actually added, so a reversal takes out exactly that rather
+// than a fresh estimate of it. The two are not the same number: a charge counted
+// from Play's reported payout and a reversal Play has not settled yet would be
+// estimated at the default fee rate, and the difference would sit in the total
+// for good.
+//
+// Bounded by count rather than by age, unlike the buckets: an account busy enough
+// to evict an entry still inside the bucket window falls back to counting that
+// refund without subtracting it, which is the safe direction to be wrong in.
+export const MAX_COUNTED = 5000
+
+export function remember(ledger, id, { currency, amount }, max = MAX_COUNTED) {
+  if (ledger.some(([known]) => known === id)) return ledger
+  const next = [...ledger, [id, amount, currency]]
+  return next.length > max ? next.slice(next.length - max) : next
+}
+
+// The currency has to match. A developer paid in a different currency than when
+// the charge was counted would otherwise have an old figure taken straight out of
+// a total kept in the new one.
+export function amountFor(ledger, id, currency) {
+  const found = ledger.find(([known]) => known === id)
+  if (!found) return null
+  // Zero is zero in every currency — which is what the entries banked for orders
+  // adopted at first sync are worth. Any other figure has to have been counted in
+  // the same currency the total is kept in.
+  return found[1] === 0 || found[2] === currency ? found[1] : null
+}
+
+// A hand-entered correction, kept in buckets of the same shape so the same fold
+// answers the day, the week and the month for it too. The counts are left at
+// zero: what is being corrected is an amount the tally got wrong, not an order it
+// failed to see, and inventing an order would make the count disagree with the
+// messages the reader was actually sent.
+export function adjust(buckets, key, { currency, amount }) {
+  const prev = { ...empty(), ...buckets[key] }
+  if (prev.currency && currency && prev.currency !== currency) return null
+  return {
+    ...buckets,
+    [key]: { ...prev, currency: prev.currency ?? currency ?? null, amount: prev.amount + amount },
+  }
+}
+
+// Announced orders and hand-entered corrections, added up as one figure. Kept
+// apart in storage — a poll writing its buckets back must not be able to lose a
+// correction entered while it was in flight — so they are only ever brought
+// together here.
+export function combine(a, b) {
+  const crossed = a.currency && b.currency && a.currency !== b.currency
+  return {
+    ...a,
+    currency: a.currency ?? b.currency,
+    // A correction in another currency is not quietly added to this one, for the
+    // same reason an order in one is not.
+    amount: a.amount + (crossed ? 0 : b.amount),
+    uncounted: a.uncounted + (crossed && b.amount ? 1 : 0),
+  }
+}
+
+// The day counting started, as a timestamp. An install that was already counting
+// before the ledger existed has no entry for those charges, and this is what
+// tells a refund of one of them from a refund of history that was never counted.
+export function startedAt(buckets) {
+  const keys = Object.keys(buckets).sort()
+  return keys.length ? Date.parse(`${keys[0]}T00:00:00Z`) : null
 }
 
 // Keys sort lexicographically because they are ISO dates, which is the whole
