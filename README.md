@@ -6,15 +6,9 @@ developer account takes a new order or a refund.
 No server, no account, nothing to set up per app. It runs in your browser using
 the Play Console session you are already signed in to.
 
-```
-🔔 New order
-Premium · premium_unlock
-com.example.app · KR
-USD 4.99 → KRW 5,020 est. net
-2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC
-GPA.1234-5678-9012-34567
-Today KRW 12,240 · 3 orders · 1 refund, KRW -6,500
-```
+<p align="center">
+  <img src="docs/telegram.png" alt="A Telegram chat with the bot: two order messages, a refund, and a /today reply" width="330">
+</p>
 
 Send the bot `/today`, `/week` (from Sunday) or `/month` — they appear in the
 bot's own command menu, so there is nothing to memorise.
@@ -108,6 +102,14 @@ recoveries. It never leaves the machine.
 ```bash
 node --test tools/extension.test.mjs   # unit tests
 ./tools/package.sh                     # builds dist/kaching-<version>.zip
+```
+
+The chat mockup above is `docs/telegram.html`, rendered headless — sample data
+only, no real order IDs:
+
+```bash
+chrome --headless --allow-file-access-from-files --force-device-scale-factor=2 \
+       --window-size=372,856 --screenshot=docs/telegram.png docs/telegram.html
 ```
 
 Packaging verifies that every manifest reference and relative import is present
