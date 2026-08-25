@@ -13,6 +13,15 @@ const say = (text, cls = '') => {
   log.className = cls
 }
 
+// The question test answers beside the fields it tests. Sent to the page footer
+// instead, a multi-line answer would appear somewhere the reader is not looking
+// after clicking a button halfway up the page.
+const sayAi = (text, cls = '') => {
+  const out = $('aiLog')
+  out.textContent = text
+  out.className = cls
+}
+
 // ------------------------------------------------------------------------ i18n
 
 document.title = t('optTitle')
@@ -178,22 +187,22 @@ $('test').addEventListener('click', async () => {
 // reach anyway — and saying "save first" is clearer than a fetch that fails.
 $('testAi').addEventListener('click', async () => {
   const saved = await load()
-  if (!saved.aiKey) return say(t('msgNeedAiKey'), 'err')
+  if (!saved.aiKey) return sayAi(t('msgNeedAiKey'), 'err')
   if (saved.aiKey !== $('aiKey').value.trim()
     || saved.aiBaseUrl !== $('aiBaseUrl').value.trim()
     || saved.aiModel !== $('aiModel').value.trim()) {
-    return say(t('msgSaveAiFirst'), 'err')
+    return sayAi(t('msgSaveAiFirst'), 'err')
   }
   // Checked here rather than left to the fetch, which fails with a network error
   // that says nothing about which of the two things went wrong.
   const origin = `${new URL(saved.aiBaseUrl).origin}/*`
   if (!(await chrome.permissions.contains({ origins: [origin] }))) {
-    return say(t('msgNeedAiHost'), 'err')
+    return sayAi(t('msgNeedAiHost'), 'err')
   }
 
-  say(t('msgAsking', saved.aiModel))
+  sayAi(t('msgAsking', saved.aiModel))
   const res = await ask('testAi')
-  say(res.ok ? t('msgAiAnswered', res.result) : res.error, res.ok ? 'ok' : 'err')
+  sayAi(res.ok ? t('msgAiAnswered', res.result) : res.error, res.ok ? 'ok' : 'err')
 })
 
 $('checkNow').addEventListener('click', async () => {
