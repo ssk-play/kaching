@@ -1,5 +1,5 @@
 import {
-  send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands, MENU_VERSION,
+  send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands,
 } from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured } from './settings.js'
@@ -11,7 +11,7 @@ import {
   remember as rememberCharge, amountFor, startedAt, adjust, combine,
   dayKey, monthKey, weekStart, dayOf, DAY,
 } from './totals.js'
-import { ask } from './llm.js'
+import { ask, isQuestion, freshTurns, nextTurns } from './llm.js'
 import { tools as ledgerTools } from './ledger.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
@@ -114,7 +114,7 @@ function publishMenu() {
 async function registerMenu() {
   const { botToken, chatId } = await load()
   if (!botToken || !chatId) return
-  const key = `${botToken}:${chatId}:${MENU_VERSION}`
+  const key = `${botToken}:${chatId}`
   const { menuFor } = await chrome.storage.local.get({ menuFor: null })
   if (menuFor === key) return
   try {
@@ -194,7 +194,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
         rates: {}, payoutCurrency: null, totals: {}, adjustments: {},
-        counted: [], countedSince: 0,
+        counted: [], countedSince: 0, chatTurns: null,
       })
       badge('', '#9e9e9e')
       await record('info', 'logReset')
@@ -276,7 +276,11 @@ async function waitForCommands(s) {
     const [head = '', ...rest] = said.trim().split(/\s+/)
     const cmd = head.toLowerCase().split('@')[0]
     const arg = rest.join(' ')
-    const key = SPANS[cmd]
+    // hasOwn, not a bare lookup: "constructor" and "toString" are inherited keys
+    // that answer truthy, and now that anything not a command is a question, a
+    // sentence starting with one of those words would be swallowed by the totals
+    // branch instead of being answered.
+    const key = Object.hasOwn(SPANS, cmd) ? SPANS[cmd] : undefined
     const reply = key
       ? totalLine(key, spanOf(totals, adjustments, key, today)) ?? t(key, '—', 0)
       : cmd === '/adjust'
@@ -285,21 +289,28 @@ async function waitForCommands(s) {
           ? // A fetch of its own, so an expired Console session says so here
             // rather than answering with a silent zero.
             await recount(s, arg).catch((err) => t('tgFailOther', String(err?.message ?? err)))
-          : cmd === '/ai'
-            ? await answerQuestion(s, arg)
-            : cmd === '/start' || cmd === '/help'
-              ? t('cmdHelp')
-              : null
-    if (reply) {
+          : cmd === '/start' || cmd === '/help'
+            ? help(s)
+            : null
+    // Anything that is not one of the five is not a malformed command, it is a
+    // sentence. Worked out after the chain rather than inside it because, alone
+    // among the branches, what it answers is only worth remembering once the
+    // reader has actually seen it.
+    const asked = reply ? null : await answerQuestion(s, said)
+    const text = reply ?? asked?.reply ?? null
+    if (text) {
       // Only a reply that actually landed is logged as answered, and only then
       // is the command written off. The log is the one diagnostic surface here;
       // reporting a delivery that never happened is worse than saying nothing.
-      const landed = await sendTelegram(s.botToken, s.chatId, label(s, reply)).then(
+      const landed = await sendTelegram(s.botToken, s.chatId, label(s, text)).then(
         () => true,
         () => false,
       )
       if (!landed) break
-      await record('info', 'logAnswered', cmd)
+      // A conversation that recorded a turn nobody saw would have the model
+      // answer the next question as a follow-up to one that never happened.
+      await asked?.remember?.()
+      await record('info', 'logAnswered', cmd.startsWith('/') ? cmd : t('logAsked'))
     }
     done = u.update_id + 1
   }
@@ -458,25 +469,69 @@ async function restate(day, figures, epoch) {
   return { said: t('totalRecountMoved', signed), note: signed }
 }
 
-// Free text, answered by a model on the user's own API key. Kept behind a
-// command rather than reading every message: in a group Telegram delivers only
-// commands to a bot at all, and a prefix is also what stops a mistyped /today or
-// a passing remark from spending someone's money.
+// A sentence, answered by a model on the user's own API key.
+//
+// No prefix to remember, because remembering one is the thing the command menu
+// exists to avoid and a sentence has nowhere to put it.
+//
+// Only the configured chat is read at all. In a group that is still every
+// message the bot is handed, and how many that is depends on settings this
+// cannot see: Telegram's privacy mode, on by default, hands a bot only commands,
+// @mentions and replies to its own messages — but it does not apply at all to a
+// bot that has been made an administrator, and it can be turned off outright in
+// @BotFather. So a group where either is true sends the whole conversation
+// through here, on the owner's key. The private chat this was built for sends
+// only what the owner types.
 //
 // The model reads the tally and cannot write to it, so the worst this can do is
 // say something wrong — which the figures it is asked to quote alongside give
 // the reader a way to catch. /recount and /adjust remain the only writers.
-async function answerQuestion(s, arg) {
-  const question = String(arg).trim()
-  if (!question) return t('cmdAiUsage')
-  // Unset is the default, not a fault: everything else here works without a key
-  // and has to keep working without one.
-  if (!s.aiKey) return t('cmdAiNeedKey')
-  const today = dayKey(Date.now())
-  return ask({ apiKey: s.aiKey, question, today, tools: ledgerTools(today) }).catch((err) =>
-    t('tgFailOther', String(err?.message ?? err)),
-  )
+async function answerQuestion(s, said) {
+  const question = said.trim()
+  if (!isQuestion(question)) return null
+  // Silence rather than a notice. With no key set this is simply a chat the bot
+  // is not listening in on, and replying to every message with a setup prompt
+  // would make it unusable as one.
+  if (!s.aiKey) return null
+
+  // One clock for both ends of the call. Read at the start and again at the end,
+  // a conversation that was still current when its history was assembled could
+  // be judged lapsed by the time the answer came back, and collapse to nothing
+  // while the reader was mid-sentence.
+  const now = Date.now()
+  const today = dayKey(now)
+  const epoch = resetEpoch
+  // Stored as the two sentences rather than as the model's own message list: the
+  // tool_use blocks in that list mean nothing without the results that answered
+  // them, and a pair broken across a worker teardown is a request the API
+  // rejects outright.
+  const { chatTurns } = await chrome.storage.local.get({ chatTurns: null })
+  try {
+    const answer = await ask({
+      apiKey: s.aiKey, question, today, tools: ledgerTools(today),
+      history: freshTurns(chatTurns, now),
+    })
+    const next = nextTurns(chatTurns, now, question, answer)
+    return {
+      reply: answer,
+      // Held back until the answer has landed, and dropped if the slate was
+      // cleared while the model was still working — writing here would put the
+      // cleared account's conversation back.
+      remember: async () => {
+        if (epoch === resetEpoch) await chrome.storage.local.set({ chatTurns: next })
+      },
+    }
+  } catch (err) {
+    // Said, but not remembered. Replayed as the assistant's own words on the next
+    // question, "could not reach Anthropic" would read to the model as something
+    // it had once said about the tally.
+    return { reply: t('tgFailOther', String(err?.message ?? err)) }
+  }
 }
+
+// The five fixed commands are in the bot's own menu; what is not discoverable is
+// that a sentence works too, and only once a key makes it work.
+const help = (s) => (s.aiKey ? `${t('cmdHelp')} ${t('cmdHelpAsk')}` : t('cmdHelp'))
 
 // A short list, newest last, of chats that have talked to this bot. It exists so
 // Find chat ID still works after a poll has consumed the update that named them.

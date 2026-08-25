@@ -4,9 +4,9 @@
 // this extension has no build step, and a bundler earns its place somewhere
 // other than one POST.
 //
-// The three fixed commands never come through here. /today has to answer when
-// the key is missing, expired or over its limit, so it stays a lookup and this
-// stays the thing you ask when no command fits the question.
+// The five fixed commands never come through here. /today has to answer when the
+// key is missing, expired or over its limit, so it stays a lookup and this stays
+// what answers everything that is not one of them.
 import { t } from './i18n.js'
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages'
@@ -43,6 +43,8 @@ const system = (today) =>
   [
     "You answer questions about one Google Play developer's own sales tally, in a Telegram chat.",
     `Today is ${today}. Every day is an ISO date in the developer's own time zone.`,
+    'You are talking to the developer, so a message may be a follow-up to the last one, or may',
+    'not be a question at all — greet a greeting briefly and say what you can look up.',
     'Use read_totals for every figure. Never estimate, extrapolate or invent one, and never',
     'answer from memory of an earlier turn if you can read it again.',
     'Quote the exact amounts you read, with their currency, so the reader can check the answer',
@@ -51,6 +53,37 @@ const system = (today) =>
     'Reply in the language of the question, as a few short lines of plain text.',
     'No Markdown, no tables, no preamble.',
   ].join(' ')
+
+// What counts as a question. Empty is a photo or a sticker; a leading slash is a
+// command, and one this does not know is a typo rather than a sentence —
+// answering /todya would spend money on a slip the user is about to correct.
+export const isQuestion = (said) => {
+  const text = String(said).trim()
+  return Boolean(text) && !text.startsWith('/')
+}
+
+// Enough for "그럼 지난달은?" to know what last month is being compared to, and no
+// more: every remembered turn is resent with the next question, so this is a
+// bill as much as a memory.
+export const MAX_TURNS_KEPT = 4
+// A question asked half an hour after the last one is a new subject. Carrying
+// the old one in would have the model answer about days nobody asked about, and
+// pay to reread them.
+export const HISTORY_TTL_MS = 30 * 60_000
+
+const spent = (stored, now) => !stored || now - stored.at > HISTORY_TTL_MS
+
+// Kept apart from the storage read so the rule about when a conversation has
+// lapsed is one expression both sides share, rather than two that can disagree
+// about which turns are still current.
+export const freshTurns = (stored, now) => (spent(stored, now) ? [] : stored.turns)
+
+export const nextTurns = (stored, now, q, a) => ({
+  // Stamped at the last turn, not the first: a conversation still being had has
+  // not lapsed, however long it has been going.
+  at: now,
+  turns: [...freshTurns(stored, now), { q, a }].slice(-MAX_TURNS_KEPT),
+})
 
 export const textOf = (content) =>
   content
@@ -118,8 +151,18 @@ const resultsFor = (uses, tools) =>
     }),
   )
 
-export async function ask({ apiKey, question, today, tools }) {
-  const messages = [{ role: 'user', content: question }]
+export async function ask({ apiKey, question, today, tools, history = [] }) {
+  // Replayed as plain sentences. What the model actually said and did on those
+  // turns — which days it read, in how many calls — is not carried: it can read
+  // them again for the price of one tool call, and a tool_use block resent
+  // without the result that answered it is a request the API rejects.
+  const messages = [
+    ...history.flatMap(({ q, a }) => [
+      { role: 'user', content: q },
+      { role: 'assistant', content: a },
+    ]),
+    { role: 'user', content: question },
+  ]
   const specs = tools.map((x) => x.spec)
 
   for (let turn = 0; turn < MAX_TURNS; turn += 1) {

@@ -31,21 +31,37 @@ instead:
 
 ## Asking in plain words
 
-The five commands answer five fixed questions. For the rest there is `/ai`,
-which is off until you put an Anthropic API key in the settings:
+The five commands answer five fixed questions. Put an Anthropic API key in the
+settings and anything else you type is answered too — no prefix, no menu entry
+to find:
 
 ```
-/ai 최근 일주일간 일별 수익
-/ai is this month ahead of last month
-/ai which day last week sold nothing
+최근 일주일간 일별 수익
+→ 8월 19일 12,000원 · 20일 0원 · 21일 45,500원 …
+
+그럼 지난달은?
 ```
+
+The last four exchanges are kept for half an hour, which is what lets the second
+question mean anything. After that a question stands on its own again.
 
 It reads the same tally `/today` answers from and cannot write to it, so the
 worst it can do is say something wrong — and it is asked to quote the figures it
-read, so you can check the sentence against them. What leaves the browser is your
-question and the daily figures needed to answer it — amounts, order and refund
-counts, one row per day — sent to Anthropic on your key and your bill. Everything
-else keeps working with no key set.
+read, so you can check the sentence against them. Anything starting with `/` that
+is not one of the five is left alone, so a mistyped command is not paid for.
+
+What leaves the browser is what you typed and the daily figures needed to answer
+it — amounts, order and refund counts, one row per day — sent to Anthropic on
+your key and your bill. With no key set the bot answers commands and nothing
+else, exactly as before.
+
+In a private chat that is only what you type. **In a group, check what Telegram
+is handing the bot before you set a key.** Privacy mode is on by default and
+delivers only commands, @mentions and replies to the bot's own messages — so
+replying to an order message with "이 날 얼마였지?" works and the rest of the
+conversation never reaches it. That stops being true if the bot is made a group
+administrator, or if privacy mode is turned off in @BotFather: then the whole
+group's chatter goes to Anthropic on your key, and nothing here rate-limits it.
 
 An order is filed under the date Play stamped it, which is what lets `/recount`
 speak about the same day the tally does. The recount counts only orders the bot
@@ -66,7 +82,7 @@ that day supersedes them.
 | Local time / UTC | both on | |
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
-| Anthropic API key | — | Optional; turns on `/ai` |
+| Anthropic API key | — | Optional; lets the bot answer anything that is not a command |
 | Check every | 10 min | Only runs while Chrome is open |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |

@@ -82,17 +82,11 @@ export async function updates(botToken, offset, waitSeconds = 0) {
 // Written out per language rather than pulled from chrome.i18n: both lists are
 // registered at once so the menu follows the *Telegram* user's language, and
 // chrome.i18n only ever yields the one locale the browser is running in.
-// Bumped whenever the lists below change. Telegram keeps the menu on its side
-// and the caller only registers once per bot and chat, so without this an
-// install that already has a menu would never be told about a new command.
-export const MENU_VERSION = 2
-
 const MENU = {
   en: [
     { command: 'today', description: "Today's total so far" },
     { command: 'week', description: 'This week so far (from Sunday)' },
     { command: 'month', description: 'This month so far' },
-    { command: 'ai', description: 'Ask a question about the totals' },
     { command: 'recount', description: 'Work a day out again from Play' },
     { command: 'adjust', description: "Correct a day's total by an amount" },
     { command: 'help', description: 'What this bot can do' },
@@ -101,7 +95,6 @@ const MENU = {
     { command: 'today', description: '오늘 누계' },
     { command: 'week', description: '이번 주 누계 (일요일부터)' },
     { command: 'month', description: '이번 달 누계' },
-    { command: 'ai', description: '누계에 대해 질문하기' },
     { command: 'recount', description: '특정 날짜를 Play 에서 재집계' },
     { command: 'adjust', description: '특정 날짜 누계를 금액으로 보정' },
     { command: 'help', description: '이 봇이 할 수 있는 일' },

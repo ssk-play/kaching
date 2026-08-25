@@ -40,7 +40,8 @@ const { chatsIn } = await load('telegram.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
-const { ask, textOf } = await load('llm.js')
+const { ask, textOf, isQuestion, freshTurns, nextTurns, MAX_TURNS_KEPT, HISTORY_TTL_MS } =
+  await load('llm.js')
 
 const order = (over = {}) => ({
   id: 'GPA.1111-2222-3333-44444',
@@ -813,7 +814,7 @@ test('the week reads the same sentence as the day and the month', () => {
   assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week KRW 8,000 · 1 order')
 })
 
-// -------------------------------------------------------------- /ai
+// ------------------------------------------- questions asked in plain words
 
 // A tally with two selling days, a gap, and a correction on one of them.
 const ledger = () => {
@@ -1004,7 +1005,7 @@ test('a correction earlier than the first announced order is not clipped out', (
   const { totals } = ledger()
   // /adjust takes any past day, so a correction can predate everything the bot
   // announced. /today, /week and /month all count it; a floor read off the
-  // announced days alone would leave /ai contradicting them.
+  // announced days alone would leave the model contradicting them.
   const adjustments = T.adjust({}, '2026-08-10', { currency: 'KRW', amount: 9000 })
   const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
   assert.equal(out.since, '2026-08-10')
@@ -1033,7 +1034,7 @@ test('a day that never happened is refused, not walked past', () => {
 test('a bucket key that does not parse cannot take every question down', () => {
   // /adjust validates the shape of a day, not that it exists, so "2026-00-15"
   // can reach storage. startedAt reads NaN off it and new Date(NaN) throws —
-  // which would make every /ai question fail while /today, /week and /month,
+  // which would make every question fail while /today, /week and /month,
   // which match by prefix, kept looking healthy.
   const { totals } = ledger()
   const adjustments = T.adjust({}, '2026-00-15', { currency: 'KRW', amount: 5000 })
@@ -1050,10 +1051,115 @@ test('a range written backwards is told so, not told the days are in the future'
   assert.match(back.error, /on or before/)
 })
 
-test('one day reads the same whether /today or /ai asks for it', () => {
+test('one day reads the same whether /today or the model asks for it', () => {
   const { totals, adjustments } = ledger()
   // The whole point of the shared fold: two answers about the same date cannot
   // come from two expressions that could drift apart.
   const row = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-22' }, '2026-08-25').days[0]
   assert.equal(row.amount, T.dayOf(totals, adjustments, '2026-08-22').amount)
+})
+
+test('an earlier exchange is replayed so a follow-up has something to follow', async () => {
+  storage = ledger()
+  const sent = stubApi([says('8월은 3,500원입니다.')])
+  await ask({
+    apiKey: 'k', question: '그럼 지난달은?', today: '2026-08-25',
+    history: [{ q: '이번 달 얼마야', a: '이번 달 4,500원입니다.' }],
+    tools: ledgerTools('2026-08-25'),
+  })
+  assert.deepEqual(
+    sent[0].messages,
+    [
+      { role: 'user', content: '이번 달 얼마야' },
+      { role: 'assistant', content: '이번 달 4,500원입니다.' },
+      { role: 'user', content: '그럼 지난달은?' },
+    ],
+  )
+})
+
+test('a remembered turn carries the sentences, never the tool blocks', async () => {
+  storage = ledger()
+  // A tool_use resent without the result that answered it is a request the API
+  // rejects outright, and a service-worker teardown between the two is exactly
+  // how the pair gets broken.
+  const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW.')])
+  await ask({
+    apiKey: 'k', question: 'how did it go', today: '2026-08-25',
+    history: [{ q: 'and before that', a: 'nothing recorded.' }],
+    tools: ledgerTools('2026-08-25'),
+  })
+  for (const m of sent[0].messages) assert.equal(typeof m.content, 'string')
+})
+
+test('history is optional, so a first question is a first question', async () => {
+  storage = ledger()
+  const sent = stubApi([says('hi')])
+  await ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') })
+  assert.deepEqual(sent[0].messages, [{ role: 'user', content: 'hi' }])
+})
+
+test('a command is not a question, and neither is a sticker', () => {
+  assert.equal(isQuestion('지난주 얼마야'), true)
+  // Anything with a slash on the front is a command. One this does not know is a
+  // typo the user is about to correct, and answering it would be paid for.
+  assert.equal(isQuestion('/today'), false)
+  assert.equal(isQuestion('/todya'), false)
+  // A photo, a sticker or a join notice arrives with no text at all.
+  assert.equal(isQuestion(''), false)
+  assert.equal(isQuestion('   '), false)
+})
+
+test('a conversation lapses after the window, but not while it is being had', () => {
+  const now = 1_800_000_000_000
+  const fresh = { at: now - 60_000, turns: [{ q: 'a', a: 'b' }] }
+  assert.deepEqual(freshTurns(fresh, now), [{ q: 'a', a: 'b' }])
+  // Half an hour on, the next question is a new subject; carrying the old one in
+  // would have the model answer about days nobody asked about, and pay to reread
+  // them.
+  assert.deepEqual(freshTurns({ ...fresh, at: now - HISTORY_TTL_MS - 1 }, now), [])
+  assert.deepEqual(freshTurns(null, now), [])
+
+  // Stamped at the last turn, so a conversation still going does not lapse
+  // however long it has been going.
+  const carried = nextTurns(fresh, now, 'c', 'd')
+  assert.equal(carried.at, now)
+  assert.deepEqual(carried.turns, [{ q: 'a', a: 'b' }, { q: 'c', a: 'd' }])
+  // A lapsed one starts over rather than resuming.
+  assert.deepEqual(nextTurns({ ...fresh, at: now - HISTORY_TTL_MS - 1 }, now, 'c', 'd').turns, [
+    { q: 'c', a: 'd' },
+  ])
+})
+
+test('only the last few exchanges are kept, because each one is resent', () => {
+  const now = 1_800_000_000_000
+  let stored = null
+  for (let i = 0; i < MAX_TURNS_KEPT + 3; i += 1) stored = nextTurns(stored, now, `q${i}`, `a${i}`)
+  assert.equal(stored.turns.length, MAX_TURNS_KEPT)
+  assert.equal(stored.turns[0].q, `q${3}`)
+  assert.equal(stored.turns.at(-1).q, `q${MAX_TURNS_KEPT + 2}`)
+})
+
+test('an inherited property name is a question, not a command', () => {
+  // "constructor" and "toString" answer truthy from a bare object lookup. With
+  // every non-command now going to the model, a sentence starting with one of
+  // them would be swallowed by the totals branch and silently never answered.
+  const SPANS = { '/today': 'totalToday', '/week': 'totalWeek', '/month': 'totalMonth' }
+  for (const word of ['constructor', 'tostring', 'valueof', '__proto__']) {
+    assert.equal(Object.hasOwn(SPANS, word), false, word)
+  }
+  assert.equal(Object.hasOwn(SPANS, '/today'), true)
+  // And they are questions, so they must reach the model rather than nothing.
+  assert.equal(isQuestion('constructor 관련 매출 알려줘'), true)
+})
+
+test('one clock for both ends of a call, so a live conversation cannot collapse', () => {
+  const now = 1_800_000_000_000
+  // Read at the start and again at the end, a conversation 29m58s old when the
+  // question went out is judged lapsed when the answer comes back, and the
+  // history it was answered from is thrown away mid-sentence.
+  const stored = { at: now - HISTORY_TTL_MS + 2_000, turns: [{ q: 'a', a: 'b' }] }
+  assert.equal(freshTurns(stored, now).length, 1)
+  assert.equal(nextTurns(stored, now, 'c', 'd').turns.length, 2)
+  // The collapse the shared clock avoids, shown with the clock read again later.
+  assert.equal(nextTurns(stored, now + 5_000, 'c', 'd').turns.length, 1)
 })

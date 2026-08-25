@@ -149,9 +149,9 @@ export function combine(a, b) {
 }
 
 // One day's figure, announced orders and hand-entered corrections together.
-// Exported rather than written out per caller: /today and /ai answer from the
-// same expression, and a second copy of it is how one of them starts reporting a
-// correction the other does not.
+// Exported rather than written out per caller: /today and the ledger the model
+// reads answer from the same expression, and a second copy of it is how one of
+// them starts reporting a correction the other does not.
 export const dayOf = (totals, adjustments, day) => combine(sum(totals, day), sum(adjustments, day))
 
 // The day counting started, as a timestamp. An install that was already counting
