@@ -25,7 +25,14 @@ export const DEFAULTS = {
   showDailyTotal: true,
 
   // questions
+  //
+  // A URL rather than a brand, because the shape below it is the same nearly
+  // everywhere now. The defaults are the cheapest thing that works out of the
+  // box; changing them points this at OpenAI, at a gateway, or at something on
+  // the user's own machine.
   aiKey: '',
+  aiBaseUrl: 'https://api.deepseek.com',
+  aiModel: 'deepseek-v4-flash',
 
   // schedule
   intervalMinutes: 10,

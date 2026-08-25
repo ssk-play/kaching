@@ -15,8 +15,9 @@
     "https://play.google.com/*",
     "https://playconsolemonetization-pa.clients6.google.com/*",
     "https://api.telegram.org/*",
-    "https://api.anthropic.com/*"
+    "https://api.deepseek.com/*"
   ],
+  "optional_host_permissions": ["https://*/*"],
   "declarative_net_request": {
     "rule_resources": [
       { "id": "console_origin", "enabled": true, "path": "rules.json" }

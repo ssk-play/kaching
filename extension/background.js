@@ -508,7 +508,8 @@ async function answerQuestion(s, said) {
   const { chatTurns } = await chrome.storage.local.get({ chatTurns: null })
   try {
     const answer = await ask({
-      apiKey: s.aiKey, question, today, tools: ledgerTools(today),
+      apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel,
+      question, today, tools: ledgerTools(today),
       history: freshTurns(chatTurns, now),
     })
     const next = nextTurns(chatTurns, now, question, answer)
@@ -523,7 +524,7 @@ async function answerQuestion(s, said) {
     }
   } catch (err) {
     // Said, but not remembered. Replayed as the assistant's own words on the next
-    // question, "could not reach Anthropic" would read to the model as something
+    // question, "could not reach the API" would read to the model as something
     // it had once said about the tally.
     return { reply: t('tgFailOther', String(err?.message ?? err)) }
   }

@@ -1,20 +1,24 @@
 // Answers a question about the tally, using a key the user brought themselves.
 //
-// Raw fetch rather than the Anthropic SDK for the same reason telegram.js is:
-// this extension has no build step, and a bundler earns its place somewhere
-// other than one POST.
+// Spoken to over the OpenAI chat-completions shape rather than any one vendor's
+// own. It is what nearly every provider now offers, so the setting is a URL
+// instead of a brand: DeepSeek by default because it is cheap enough not to
+// think about, OpenAI or OpenRouter or something running on the user's own
+// machine by changing one field.
+//
+// Raw fetch rather than an SDK for the same reason telegram.js is: this
+// extension has no build step, and a bundler earns its place somewhere other
+// than one POST.
 //
 // The five fixed commands never come through here. /today has to answer when the
 // key is missing, expired or over its limit, so it stays a lookup and this stays
 // what answers everything that is not one of them.
 import { t } from './i18n.js'
 
-const ENDPOINT = 'https://api.anthropic.com/v1/messages'
-const VERSION = '2023-06-01'
-// The work is reading a handful of rows and saying what they add up to. A larger
-// model would answer the same sentence for several times the money, and the
-// money here is the user's own.
-const MODEL = 'claude-haiku-4-5'
+// A trailing slash on a pasted URL would otherwise make a double one, which some
+// gateways route and others answer with a 404.
+export const endpointFor = (base) => `${String(base).replace(/\/+$/, '')}/chat/completions`
+
 const MAX_TOKENS = 1024
 // One turn to ask for figures, one to answer, and slack for a question that
 // needs two ranges. The ceiling is what stops a model that keeps re-reading the
@@ -85,25 +89,17 @@ export const nextTurns = (stored, now, q, a) => ({
   turns: [...freshTurns(stored, now), { q, a }].slice(-MAX_TURNS_KEPT),
 })
 
-export const textOf = (content) =>
-  content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n')
-    .trim()
+// Only what the model said, never what it thought on the way. A reasoning model
+// returns its working in reasoning_content, and a chat that printed that would be
+// showing the reader a draft they never asked for.
+export const textOf = (message) => String(message?.content ?? '').trim()
 
-async function call(apiKey, body) {
-  const res = await fetch(ENDPOINT, {
+async function call({ apiKey, baseUrl }, body) {
+  const res = await fetch(endpointFor(baseUrl), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': VERSION,
-      // Chrome puts an Origin of chrome-extension://<id> on this POST, and the
-      // API turns away anything carrying a browser origin unless it is told the
-      // key is meant to be there. It is: the user typed it into this extension's
-      // own settings, where their bot token already lives.
-      'anthropic-dangerous-direct-browser-access': 'true',
+      authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -121,66 +117,67 @@ async function call(apiKey, body) {
   // The API says why in the body — an expired key and a spent balance are
   // different problems with different fixes, and the status alone tells the
   // reader neither.
-  if (!res.ok) throw new Error(json.error?.message ?? `anthropic ${res.status}`)
+  if (!res.ok) throw new Error(json.error?.message ?? `${baseUrl} ${res.status}`)
   return json
 }
 
-// Every result goes back in one user message. Splitting them across several is
-// what teaches the model to stop asking for more than one thing at a time.
-const resultsFor = (uses, tools) =>
+// One message per result, each naming the call it answers. A call left without
+// its result is a conversation the API rejects on the next turn, so every one of
+// them comes back — including the ones that failed.
+const resultsFor = (calls, tools) =>
   Promise.all(
-    uses.map(async (use) => {
-      const tool = tools.find((x) => x.spec.name === use.name)
-      try {
-        if (!tool) throw new Error(`no such tool: ${use.name}`)
-        return {
-          type: 'tool_result',
-          tool_use_id: use.id,
-          content: JSON.stringify(await tool.run(use.input)),
-        }
-      } catch (err) {
+    calls.map(async (call_) => {
+      const name = call_.function?.name
+      const tool = tools.find((x) => x.spec.name === name)
+      const answer = async () => {
+        if (!tool) throw new Error(`no such tool: ${name}`)
+        // Arguments arrive as a string of JSON rather than as an object, and a
+        // model that writes malformed JSON is a thing that happens — caught
+        // below with everything else rather than thrown into the loop.
+        return JSON.stringify(await tool.run(JSON.parse(call_.function.arguments || '{}')))
+      }
+      return {
+        role: 'tool',
+        tool_call_id: call_.id,
         // Handed back rather than thrown. A failed read is something the model
         // can tell the reader about; an exception here would lose the question.
-        return {
-          type: 'tool_result',
-          tool_use_id: use.id,
-          content: String(err?.message ?? err),
-          is_error: true,
-        }
+        content: await answer().catch((err) => String(err?.message ?? err)),
       }
     }),
   )
 
-export async function ask({ apiKey, question, today, tools, history = [] }) {
+export async function ask({ apiKey, baseUrl, model, question, today, tools, history = [] }) {
   // Replayed as plain sentences. What the model actually said and did on those
   // turns — which days it read, in how many calls — is not carried: it can read
-  // them again for the price of one tool call, and a tool_use block resent
-  // without the result that answered it is a request the API rejects.
+  // them again for the price of one tool call, and a tool call resent without
+  // the result that answered it is a request the API rejects.
   const messages = [
+    { role: 'system', content: system(today) },
     ...history.flatMap(({ q, a }) => [
       { role: 'user', content: q },
       { role: 'assistant', content: a },
     ]),
     { role: 'user', content: question },
   ]
-  const specs = tools.map((x) => x.spec)
+  const specs = tools.map((x) => ({ type: 'function', function: x.spec }))
 
   for (let turn = 0; turn < MAX_TURNS; turn += 1) {
-    const reply = await call(apiKey, {
-      model: MODEL,
+    const reply = await call({ apiKey, baseUrl }, {
+      model,
       max_tokens: MAX_TOKENS,
-      system: system(today),
       tools: specs,
       messages,
     })
-    // Appended whole, not as extracted text: the tool_use blocks in it are what
-    // the results below are addressed to, and a reply stripped to its prose
-    // would leave them pointing at nothing.
-    messages.push({ role: 'assistant', content: reply.content ?? [] })
+    const said = reply.choices?.[0]?.message
+    const calls = said?.tool_calls ?? []
+    // Appended whole, because the tool_calls in it are what the results below
+    // name — a turn stripped to its prose would leave them answering nothing.
+    // Minus the reasoning: providers differ on whether they will accept their
+    // own working back, and none of them need it to continue.
+    messages.push({ role: 'assistant', content: said?.content ?? '', ...(calls.length ? { tool_calls: calls } : {}) })
 
-    const uses = (reply.content ?? []).filter((b) => b.type === 'tool_use')
-    if (!uses.length) return textOf(reply.content ?? []).slice(0, MAX_REPLY) || t('cmdAiNothing')
-    messages.push({ role: 'user', content: await resultsFor(uses, tools) })
+    if (!calls.length) return textOf(said).slice(0, MAX_REPLY) || t('cmdAiNothing')
+    messages.push(...(await resultsFor(calls, tools)))
   }
   // Out of turns with the model still reading. Saying so is the honest answer;
   // the alternative is a summary of figures it had not finished gathering.

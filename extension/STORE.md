@@ -41,8 +41,9 @@ phone beyond Telegram itself.
   `/adjust -6500` patches a day by hand, either direction, any day
 - Anything you type that is not a command is answered as a question about the
   totals — "how did last week go, day by day" — by reading the same tally.
-  Optional, off until you enter your own Anthropic API key, and read-only: it
-  cannot change a figure
+  Optional, off until you enter your own API key, and read-only: it cannot
+  change a figure. Works with any OpenAI-compatible service — DeepSeek by
+  default, or OpenAI, a gateway, or a model on your own machine
 
 **What you can control**
 
@@ -85,22 +86,24 @@ Kaching is not affiliated with Google or Telegram.
 | Host: `play.google.com` | Reads the session cookie used to sign the request. |
 | Host: `playconsolemonetization-pa.clients6.google.com` | The Play Console orders endpoint the extension reads from. |
 | Host: `api.telegram.org` | Delivers the notification to the bot the user configured. |
-| Host: `api.anthropic.com` | Answers questions the user types in plain words, using an API key the user supplies. No request is made unless the user has entered a key. |
+| Host: `api.deepseek.com` | Answers questions the user types in plain words, using an API key the user supplies. No request is made unless the user has entered a key. |
+| Optional host: `https://*/*` | Requested at runtime, never at install, and only when the user changes the API base URL to a different OpenAI-compatible service. Chrome prompts for the specific host at that moment. |
 
 ## Data usage disclosures
 
 - **Does not** collect personally identifiable information beyond what the user
-  enters (Telegram bot token, chat ID and an optional Anthropic API key), which
+  enters (Telegram bot token, chat ID and an optional API key), which
   stays on the user's machine.
 - **Does not** collect health, authentication, location or web history data.
 - **Does not** collect anything for the developer of this extension. Nothing is
   sent to the developer or to any endpoint the developer operates.
 - **Collects personal communications and financial information, for the user's
-  own purposes only, and only if the user opts in by entering an Anthropic API
+  own purposes only, and only if the user opts in by entering an API
   key.** With a key set, messages the user sends their own bot that are not
   commands, together with the daily sales totals needed to answer them, are sent
-  to `api.anthropic.com` under the user's own Anthropic account. With no key set
-  no such request is ever made. Order data is otherwise forwarded only to the
+  to the OpenAI-compatible API service the user selected (`api.deepseek.com` by
+  default), under the user's own account there. With no key set no such request
+  is ever made. Order data is otherwise forwarded only to the
   user's own Telegram chat.
 - **Not** sold. Not transferred to any third party chosen by the developer; the
   only third-party transfer is the one above, to a service the user signs up for

@@ -27,7 +27,9 @@ const CHECKBOXES = [
   'showDailyTotal', 'verbose',
 ]
 const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
-const TEXTS = ['botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey']
+const TEXTS = [
+  'botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey', 'aiBaseUrl', 'aiModel',
+]
 
 function fill(settings) {
   for (const id of TEXTS) $(id).value = settings[id]
@@ -107,11 +109,35 @@ const ask = async (type, extra = {}) => {
 
 // ---------------------------------------------------------------------- actions
 
+// The default host is in the manifest, so the common case never prompts. Any
+// other one has to be asked for: a manifest broad enough to cover every
+// OpenAI-compatible endpoint in advance would be asking for the whole web at
+// install time, to reach one host the user has not chosen yet.
+//
+// Called before anything is awaited. Chrome grants this only during a user
+// gesture, and an await ahead of it spends the click.
+function grantFor(baseUrl) {
+  let origin
+  try {
+    origin = `${new URL(baseUrl).origin}/*`
+  } catch {
+    return null
+  }
+  return chrome.permissions.request({ origins: [origin] })
+}
+
 $('save').addEventListener('click', async () => {
   const values = read()
   if (values.consoleUrl && !values.developerId) return say(t('msgBadUrl'), 'err')
   if (values.botToken && !/^\d+:[\w-]{30,}$/.test(values.botToken)) {
     return say(t('msgBadToken'), 'err')
+  }
+  // Only worth asking for when there is a key to use it with. Someone who never
+  // fills that field is never prompted about a host they will not reach.
+  if (values.aiKey) {
+    if (!/^https:\/\//.test(values.aiBaseUrl)) return say(t('msgBadAiUrl'), 'err')
+    if (!values.aiModel) return say(t('msgNeedAiModel'), 'err')
+    if (!(await grantFor(values.aiBaseUrl))) return say(t('msgNeedAiHost'), 'err')
   }
   await chrome.storage.local.set(values)
   await ask('rearm')

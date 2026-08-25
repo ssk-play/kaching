@@ -112,7 +112,7 @@ const READ_TOTALS = {
     'reversals were worth and is negative, because the money went back out. ' +
     '"uncounted" is orders in a currency that could not be converted, so that day\'s ' +
     '"amount" is short by them and any figure quoted from it has to say so.',
-  input_schema: {
+  parameters: {
     type: 'object',
     properties: {
       from: { type: 'string', description: 'First day of the range, YYYY-MM-DD' },

@@ -40,8 +40,9 @@ const { chatsIn } = await load('telegram.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
-const { ask, textOf, isQuestion, freshTurns, nextTurns, MAX_TURNS_KEPT, HISTORY_TTL_MS } =
-  await load('llm.js')
+const {
+  ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
+} = await load('llm.js')
 
 const order = (over = {}) => ({
   id: 'GPA.1111-2222-3333-44444',
@@ -901,51 +902,89 @@ function stubApi(replies) {
   return sent
 }
 
-const says = (text) => ({ stop_reason: 'end_turn', content: [{ type: 'text', text }] })
+const says = (text) => ({
+  choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text } }],
+})
 const reads = (input) => ({
-  stop_reason: 'tool_use',
-  content: [{ type: 'tool_use', id: 'tu_1', name: 'read_totals', input }],
+  choices: [{
+    finish_reason: 'tool_calls',
+    message: {
+      role: 'assistant',
+      content: '',
+      // A reasoning model returns its working alongside the answer; nothing here
+      // may print it or send it back.
+      reasoning_content: 'The user wants a range. I should call read_totals.',
+      tool_calls: [{
+        id: 'call_1',
+        type: 'function',
+        // Arguments arrive as a string of JSON, not as an object.
+        function: { name: 'read_totals', arguments: JSON.stringify(input) },
+      }],
+    },
+  }],
 })
 
 test('the model is handed the figures it asked for and its answer comes back', async () => {
   storage = ledger()
   const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW on the 22nd.')])
   const out = await ask({
-    apiKey: 'k', question: 'how did last week go', today: '2026-08-25',
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did last week go', today: '2026-08-25',
     tools: ledgerTools('2026-08-25'),
   })
   assert.equal(out, '3,500 KRW on the 22nd.')
 
-  // Every tool result rides in one user message. Split across several, the model
-  // learns to stop asking for more than one thing at a time.
-  const results = sent[1].messages.at(-1)
-  assert.equal(results.role, 'user')
-  assert.equal(results.content.length, 1)
-  assert.equal(results.content[0].tool_use_id, 'tu_1')
-  assert.match(results.content[0].content, /2026-08-22/)
-  // The assistant turn goes back whole: stripped to its prose, the tool_use
-  // block the result answers would be pointing at nothing.
-  assert.equal(sent[1].messages[1].content[0].type, 'tool_use')
+  // One message per result, naming the call it answers. A call left without its
+  // result is a conversation the API rejects on the next turn.
+  const result = sent[1].messages.at(-1)
+  assert.equal(result.role, 'tool')
+  assert.equal(result.tool_call_id, 'call_1')
+  assert.match(result.content, /2026-08-22/)
+  // The assistant turn goes back whole: stripped to its prose, the tool_calls
+  // the result answers would be pointing at nothing.
+  const assistant = sent[1].messages.at(-2)
+  assert.equal(assistant.role, 'assistant')
+  assert.equal(assistant.tool_calls[0].id, 'call_1')
+  // Its working stays behind. Providers differ on whether they accept their own
+  // reasoning back, and none of them need it to continue.
+  assert.equal('reasoning_content' in assistant, false)
+  // The system prompt leads the conversation rather than riding beside it.
+  assert.equal(sent[1].messages[0].role, 'system')
 })
 
 test('a tool the model invents is reported to it instead of losing the question', async () => {
   storage = ledger()
   const sent = stubApi([
-    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu_9', name: 'write_totals', input: {} }] },
+    {
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_9', type: 'function',
+            function: { name: 'write_totals', arguments: '{}' },
+          }],
+        },
+      }],
+    },
     says('I can only read the tally.'),
   ])
   assert.equal(
-    await ask({ apiKey: 'k', question: 'set today to 0', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    await ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'set today to 0', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
     'I can only read the tally.',
   )
-  assert.equal(sent[1].messages.at(-1).content[0].is_error, true)
+  // Reported back rather than thrown, and still naming the call, so the
+  // conversation the next turn sends is one the API will accept.
+  const failed = sent[1].messages.at(-1)
+  assert.equal(failed.tool_call_id, 'call_9')
+  assert.match(failed.content, /no such tool/)
 })
 
 test('a model that keeps reading is cut off rather than left to spend', async () => {
   storage = ledger()
   stubApi(Array.from({ length: 8 }, () => reads({ from: '2026-08-20', to: '2026-08-22' })))
   const out = await ask({
-    apiKey: 'k', question: 'how did it go', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did it go', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
   })
   // Said plainly. A summary here would be a summary of figures it had not
   // finished gathering.
@@ -958,7 +997,7 @@ test('the API says why it refused, and that reaches the chat', async () => {
     json: async () => ({ error: { message: 'credit balance is too low' } }),
   })
   await assert.rejects(
-    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
     // An expired key and a spent balance are different problems with different
     // fixes; the status code alone tells the reader neither.
     /credit balance is too low/,
@@ -976,7 +1015,7 @@ test('a body that fails to arrive is a failure, not an empty answer', async () =
     },
   })
   await assert.rejects(
-    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
     /aborted due to timeout/,
   )
   // A refusal is still allowed a body this cannot read: the status says enough.
@@ -988,17 +1027,20 @@ test('a body that fails to arrive is a failure, not an empty answer', async () =
     },
   })
   await assert.rejects(
-    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
     /529/,
   )
 })
 
-test('only the prose is answered with, and an empty reply is not silence', () => {
+test('only the prose is answered with, never the working beside it', () => {
+  // A chat that printed reasoning_content would be showing the reader a draft
+  // they never asked for.
   assert.equal(
-    textOf([{ type: 'tool_use', id: 'x' }, { type: 'text', text: ' 3,500 KRW ' }]),
+    textOf({ content: ' 3,500 KRW ', reasoning_content: 'let me think about August' }),
     '3,500 KRW',
   )
-  assert.equal(textOf([]), '')
+  assert.equal(textOf({ content: '' }), '')
+  assert.equal(textOf(undefined), '')
 })
 
 test('a correction earlier than the first announced order is not clipped out', () => {
@@ -1063,12 +1105,13 @@ test('an earlier exchange is replayed so a follow-up has something to follow', a
   storage = ledger()
   const sent = stubApi([says('8월은 3,500원입니다.')])
   await ask({
-    apiKey: 'k', question: '그럼 지난달은?', today: '2026-08-25',
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: '그럼 지난달은?', today: '2026-08-25',
     history: [{ q: '이번 달 얼마야', a: '이번 달 4,500원입니다.' }],
     tools: ledgerTools('2026-08-25'),
   })
+  assert.equal(sent[0].messages[0].role, 'system')
   assert.deepEqual(
-    sent[0].messages,
+    sent[0].messages.slice(1),
     [
       { role: 'user', content: '이번 달 얼마야' },
       { role: 'assistant', content: '이번 달 4,500원입니다.' },
@@ -1084,18 +1127,22 @@ test('a remembered turn carries the sentences, never the tool blocks', async () 
   // how the pair gets broken.
   const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW.')])
   await ask({
-    apiKey: 'k', question: 'how did it go', today: '2026-08-25',
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did it go', today: '2026-08-25',
     history: [{ q: 'and before that', a: 'nothing recorded.' }],
     tools: ledgerTools('2026-08-25'),
   })
-  for (const m of sent[0].messages) assert.equal(typeof m.content, 'string')
+  for (const m of sent[0].messages) {
+    assert.equal(typeof m.content, 'string')
+    assert.equal('tool_calls' in m, false)
+  }
 })
 
 test('history is optional, so a first question is a first question', async () => {
   storage = ledger()
   const sent = stubApi([says('hi')])
-  await ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') })
-  assert.deepEqual(sent[0].messages, [{ role: 'user', content: 'hi' }])
+  await ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') })
+  assert.equal(sent[0].messages.length, 2)
+  assert.deepEqual(sent[0].messages[1], { role: 'user', content: 'hi' })
 })
 
 test('a command is not a question, and neither is a sticker', () => {
@@ -1162,4 +1209,40 @@ test('one clock for both ends of a call, so a live conversation cannot collapse'
   assert.equal(nextTurns(stored, now, 'c', 'd').turns.length, 2)
   // The collapse the shared clock avoids, shown with the clock read again later.
   assert.equal(nextTurns(stored, now + 5_000, 'c', 'd').turns.length, 1)
+})
+
+test('a pasted URL reaches the same endpoint with or without its trailing slash', () => {
+  // Some gateways route a double slash and others answer it with a 404, and a
+  // pasted URL is as likely to carry one as not.
+  assert.equal(endpointFor('https://api.deepseek.com'), 'https://api.deepseek.com/chat/completions')
+  assert.equal(endpointFor('https://api.deepseek.com/'), 'https://api.deepseek.com/chat/completions')
+  assert.equal(endpointFor('https://api.openai.com/v1//'), 'https://api.openai.com/v1/chat/completions')
+})
+
+test('the tools go out in the shape this API names them', async () => {
+  storage = ledger()
+  const sent = stubApi([says('ok')])
+  await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm',
+    question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+  })
+  const [tool] = sent[0].tools
+  assert.equal(tool.type, 'function')
+  assert.equal(tool.function.name, 'read_totals')
+  // Named parameters here, not input_schema — the ledger's own field has to
+  // match or the model is handed a tool it cannot call.
+  assert.equal(tool.function.parameters.required.join(), 'from,to')
+  assert.equal(sent[0].model, 'm')
+})
+
+test('a refusal with no readable body still names where it came from', async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 402, json: async () => ({}) })
+  await assert.rejects(
+    ask({
+      apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm',
+      question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+    }),
+    // Which host refused matters once the host is something the user chose.
+    /api\.example\.com 402/,
+  )
 })
