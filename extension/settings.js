@@ -24,6 +24,16 @@ export const DEFAULTS = {
   showBreakdown: false,
   showDailyTotal: true,
 
+  // questions
+  //
+  // A URL rather than a brand, because the shape below it is the same nearly
+  // everywhere now. The defaults are the cheapest thing that works out of the
+  // box; changing them points this at OpenAI, at a gateway, or at something on
+  // the user's own machine.
+  aiKey: '',
+  aiBaseUrl: 'https://api.openai.com/v1',
+  aiModel: 'gpt-4o-mini',
+
   // schedule
   intervalMinutes: 10,
   days: 2,

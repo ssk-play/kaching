@@ -22,6 +22,17 @@ export function dayKey(ms, timeZone = Intl.DateTimeFormat().resolvedOptions().ti
 
 export const monthKey = (key) => key.slice(0, 7)
 
+// The shape of a bucket key. Exported because the command parser and the ledger
+// read both have to turn away a day they cannot look up, and two copies of this
+// is how the two start disagreeing about what a day is.
+export const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+// A key moved by whole days. Parsed as UTC for the same reason weekStart is: the
+// key is already the developer's own calendar date, and re-reading it in local
+// time would shift it for anyone west of Greenwich.
+export const shift = (key, days) =>
+  new Date(Date.parse(`${key}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
+
 // The Sunday on or before the given day. Parsed as UTC deliberately: the key is
 // already the developer's own calendar date, and re-reading it in local time
 // would shift it a day for anyone west of Greenwich.
@@ -136,6 +147,12 @@ export function combine(a, b) {
     uncounted: a.uncounted + (crossed && b.amount ? 1 : 0),
   }
 }
+
+// One day's figure, announced orders and hand-entered corrections together.
+// Exported rather than written out per caller: /today and the ledger the model
+// reads answer from the same expression, and a second copy of it is how one of
+// them starts reporting a correction the other does not.
+export const dayOf = (totals, adjustments, day) => combine(sum(totals, day), sum(adjustments, day))
 
 // The day counting started, as a timestamp. An install that was already counting
 // before the ledger existed has no entry for those charges, and this is what

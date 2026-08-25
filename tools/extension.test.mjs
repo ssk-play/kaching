@@ -13,7 +13,11 @@ const messages = JSON.parse(fs.readFileSync(path.join(EXT, '_locales/en/messages
 
 // Stub only what these modules touch, and back i18n with the real catalogue so a
 // renamed or missing key fails here rather than in the store build.
+// Storage is stubbed per test by whatever needs it; the default is an install
+// that has never counted anything.
+let storage = {}
 globalThis.chrome = {
+  storage: { local: { get: async (defaults) => ({ ...defaults, ...storage }) } },
   i18n: {
     getMessage: (key, subs = []) => {
       const raw = messages[key]?.message
@@ -35,6 +39,10 @@ const T = await load('totals.js')
 const { chatsIn } = await load('telegram.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
+const { rangeOf, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
+const {
+  ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
+} = await load('llm.js')
 
 const order = (over = {}) => ({
   id: 'GPA.1111-2222-3333-44444',
@@ -805,4 +813,436 @@ test('the week reads the same sentence as the day and the month', () => {
   const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 }
   assert.equal(totalLine('totalWeek', totals), 'This week KRW 8,000 · 2 orders')
   assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week KRW 8,000 · 1 order')
+})
+
+// ------------------------------------------- questions asked in plain words
+
+// A tally with two selling days, a gap, and a correction on one of them.
+const ledger = () => {
+  const krw = (amount) => ({ currency: 'KRW', amount })
+  let totals = {}
+  totals = T.record(totals, '2026-08-20', { net: krw(1000), currency: 'KRW' })
+  totals = T.record(totals, '2026-08-22', { net: krw(4000), currency: 'KRW' })
+  const adjustments = T.adjust({}, '2026-08-22', { currency: 'KRW', amount: -500 })
+  return { totals, adjustments }
+}
+
+test('the ledger read reports a day that sold nothing, not just the days that did', () => {
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
+  assert.deepEqual(
+    out.days.map((d) => [d.day, d.amount ?? 0]),
+    [
+      ['2026-08-20', 1000],
+      ['2026-08-21', 0],
+      // The hand-entered correction is read together with the tally, exactly as
+      // /today reads it. A model told 4,000 here would contradict the command.
+      ['2026-08-22', 3500],
+    ],
+  )
+})
+
+test('the ledger read says nothing about days before the tally began', () => {
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
+  // Not zeroes: those days have no entry because nothing was counting yet, and
+  // reporting them as zero would be reporting a drought that never happened.
+  assert.equal(out.since, '2026-08-20')
+  assert.equal(out.days[0].day, '2026-08-20')
+  assert.equal(out.days.length, 3)
+})
+
+test('an empty tally is said to be empty rather than answered with zeroes', () => {
+  const out = rangeOf({}, {}, { from: '2026-08-01', to: '2026-08-02' }, '2026-08-25')
+  assert.deepEqual(out.days, [])
+  assert.equal(out.since, null)
+  assert.ok(out.note)
+})
+
+test('a range reaching into the future is trimmed to today, not refused', () => {
+  const { totals, adjustments } = ledger()
+  // "this week" ends on Saturday; the question is still about the days that have
+  // happened, so the days that have not are simply not there.
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-31' }, '2026-08-21')
+  assert.equal(out.days.at(-1).day, '2026-08-21')
+  // A range that is entirely in the future has nothing to trim to.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-09-01', to: '2026-09-02' }, '2026-08-21').error)
+})
+
+test('an over-long range comes back as something the model can act on', () => {
+  // A tally that really does hold a year: the floor moves nothing, so the cap is
+  // what stands between one question and a year of rows.
+  const old = T.record({}, '2026-01-01', { net: { currency: 'KRW', amount: 100 }, currency: 'KRW' })
+  const out = rangeOf(old, {}, { from: '2026-01-01', to: '2026-12-31' }, '2026-12-31')
+  assert.match(out.error, new RegExp(String(MAX_RANGE_DAYS)))
+  assert.ok(!out.days)
+  // A malformed date is refused the same way rather than throwing into the loop.
+  assert.ok(rangeOf({}, {}, { from: 'last monday', to: '2026-08-22' }, '2026-08-25').error)
+})
+
+test('the cap counts the rows that would be emitted, not the years asked about', () => {
+  // "How did this year go" against a days-old install is a handful of rows. The
+  // refusal would cost a turn teaching the model a start date it does not name.
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-01-01', to: '2026-08-25' }, '2026-08-25')
+  assert.ok(!out.error)
+  assert.equal(out.days.length, 6)
+  assert.ok(out.days.length <= MAX_RANGE_DAYS)
+})
+
+// One canned exchange per fetch, so a test says exactly how many turns it expects.
+function stubApi(replies) {
+  const sent = []
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body))
+    const reply = replies.shift()
+    if (!reply) throw new Error('unexpected extra request')
+    return { ok: true, json: async () => reply }
+  }
+  return sent
+}
+
+const says = (text) => ({
+  choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: text } }],
+})
+const reads = (input) => ({
+  choices: [{
+    finish_reason: 'tool_calls',
+    message: {
+      role: 'assistant',
+      content: '',
+      // A reasoning model returns its working alongside the answer; nothing here
+      // may print it or send it back.
+      reasoning_content: 'The user wants a range. I should call read_totals.',
+      tool_calls: [{
+        id: 'call_1',
+        type: 'function',
+        // Arguments arrive as a string of JSON, not as an object.
+        function: { name: 'read_totals', arguments: JSON.stringify(input) },
+      }],
+    },
+  }],
+})
+
+test('the model is handed the figures it asked for and its answer comes back', async () => {
+  storage = ledger()
+  const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW on the 22nd.')])
+  const out = await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did last week go', today: '2026-08-25',
+    tools: ledgerTools('2026-08-25'),
+  })
+  assert.equal(out, '3,500 KRW on the 22nd.')
+
+  // One message per result, naming the call it answers. A call left without its
+  // result is a conversation the API rejects on the next turn.
+  const result = sent[1].messages.at(-1)
+  assert.equal(result.role, 'tool')
+  assert.equal(result.tool_call_id, 'call_1')
+  assert.match(result.content, /2026-08-22/)
+  // The assistant turn goes back whole: stripped to its prose, the tool_calls
+  // the result answers would be pointing at nothing.
+  const assistant = sent[1].messages.at(-2)
+  assert.equal(assistant.role, 'assistant')
+  assert.equal(assistant.tool_calls[0].id, 'call_1')
+  // Its working stays behind. Providers differ on whether they accept their own
+  // reasoning back, and none of them need it to continue.
+  assert.equal('reasoning_content' in assistant, false)
+  // The system prompt leads the conversation rather than riding beside it.
+  assert.equal(sent[1].messages[0].role, 'system')
+})
+
+test('a tool the model invents is reported to it instead of losing the question', async () => {
+  storage = ledger()
+  const sent = stubApi([
+    {
+      choices: [{
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_9', type: 'function',
+            function: { name: 'write_totals', arguments: '{}' },
+          }],
+        },
+      }],
+    },
+    says('I can only read the tally.'),
+  ])
+  assert.equal(
+    await ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'set today to 0', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    'I can only read the tally.',
+  )
+  // Reported back rather than thrown, and still naming the call, so the
+  // conversation the next turn sends is one the API will accept.
+  const failed = sent[1].messages.at(-1)
+  assert.equal(failed.tool_call_id, 'call_9')
+  assert.match(failed.content, /no such tool/)
+})
+
+test('a model that keeps reading is cut off rather than left to spend', async () => {
+  storage = ledger()
+  stubApi(Array.from({ length: 8 }, () => reads({ from: '2026-08-20', to: '2026-08-22' })))
+  const out = await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did it go', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+  })
+  // Said plainly. A summary here would be a summary of figures it had not
+  // finished gathering.
+  assert.equal(out, messages.cmdAiGaveUp.message)
+})
+
+test('the API says why it refused, and that reaches the chat', async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    json: async () => ({ error: { message: 'credit balance is too low' } }),
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    // An expired key and a spent balance are different problems with different
+    // fixes; the status code alone tells the reader neither.
+    /credit balance is too low/,
+  )
+})
+
+test('a body that fails to arrive is a failure, not an empty answer', async () => {
+  // The timeout firing mid-body leaves an ok response whose json() rejects.
+  // Reported as nothing-came-back, it would send the reader off to ask again
+  // rather than to look at their network.
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => {
+      throw new Error('The operation was aborted due to timeout')
+    },
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    /aborted due to timeout/,
+  )
+  // A refusal is still allowed a body this cannot read: the status says enough.
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 529,
+    json: async () => {
+      throw new Error('not json')
+    },
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    /529/,
+  )
+})
+
+test('only the prose is answered with, never the working beside it', () => {
+  // A chat that printed reasoning_content would be showing the reader a draft
+  // they never asked for.
+  assert.equal(
+    textOf({ content: ' 3,500 KRW ', reasoning_content: 'let me think about August' }),
+    '3,500 KRW',
+  )
+  assert.equal(textOf({ content: '' }), '')
+  assert.equal(textOf(undefined), '')
+})
+
+test('a correction earlier than the first announced order is not clipped out', () => {
+  const { totals } = ledger()
+  // /adjust takes any past day, so a correction can predate everything the bot
+  // announced. /today, /week and /month all count it; a floor read off the
+  // announced days alone would leave the model contradicting them.
+  const adjustments = T.adjust({}, '2026-08-10', { currency: 'KRW', amount: 9000 })
+  const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
+  assert.equal(out.since, '2026-08-10')
+  assert.equal(out.days[0].day, '2026-08-10')
+  assert.equal(out.days[0].amount, 9000)
+
+  // The sharp case: a tally with nothing announced at all still has the
+  // correction to report, and saying it has no days would contradict /today.
+  const only = rangeOf({}, adjustments, { from: '2026-08-01', to: '2026-08-10' }, '2026-08-25')
+  assert.deepEqual(only.days, [{ day: '2026-08-10', currency: 'KRW', amount: 9000, orders: 0 }])
+})
+
+test('a day that never happened is refused, not walked past', () => {
+  const { totals, adjustments } = ledger()
+  // 2026-04-31 is shape-perfect and parses as May 1st, so walking from it would
+  // report a day that never existed and step straight over the one that did.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-04-31', to: '2026-05-05' }, '2026-08-25').error)
+  // Month 13 and day 32 do not parse at all; the answer is the same refusal
+  // rather than a RangeError thrown into the loop.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-13-01', to: '2026-05-05' }, '2026-08-25').error)
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-05-32', to: '2026-06-05' }, '2026-08-25').error)
+  // A real leap day is not turned away with them.
+  assert.ok(!rangeOf(totals, adjustments, { from: '2024-02-29', to: '2024-03-01' }, '2026-08-25').error)
+})
+
+test('a bucket key that does not parse cannot take every question down', () => {
+  // /adjust validates the shape of a day, not that it exists, so "2026-00-15"
+  // can reach storage. startedAt reads NaN off it and new Date(NaN) throws —
+  // which would make every question fail while /today, /week and /month,
+  // which match by prefix, kept looking healthy.
+  const { totals } = ledger()
+  const adjustments = T.adjust({}, '2026-00-15', { currency: 'KRW', amount: 5000 })
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
+  assert.equal(out.since, '2026-08-20')
+  assert.equal(out.days.length, 3)
+})
+
+test('a range written backwards is told so, not told the days are in the future', () => {
+  const { totals, adjustments } = ledger()
+  const back = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-20' }, '2026-08-25')
+  // Told the days had not happened yet, the model's only move is to reach
+  // further back — which fails the same way until the turns run out.
+  assert.match(back.error, /on or before/)
+})
+
+test('one day reads the same whether /today or the model asks for it', () => {
+  const { totals, adjustments } = ledger()
+  // The whole point of the shared fold: two answers about the same date cannot
+  // come from two expressions that could drift apart.
+  const row = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-22' }, '2026-08-25').days[0]
+  assert.equal(row.amount, T.dayOf(totals, adjustments, '2026-08-22').amount)
+})
+
+test('an earlier exchange is replayed so a follow-up has something to follow', async () => {
+  storage = ledger()
+  const sent = stubApi([says('8월은 3,500원입니다.')])
+  await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: '그럼 지난달은?', today: '2026-08-25',
+    history: [{ q: '이번 달 얼마야', a: '이번 달 4,500원입니다.' }],
+    tools: ledgerTools('2026-08-25'),
+  })
+  assert.equal(sent[0].messages[0].role, 'system')
+  assert.deepEqual(
+    sent[0].messages.slice(1),
+    [
+      { role: 'user', content: '이번 달 얼마야' },
+      { role: 'assistant', content: '이번 달 4,500원입니다.' },
+      { role: 'user', content: '그럼 지난달은?' },
+    ],
+  )
+})
+
+test('a remembered turn carries the sentences, never the tool blocks', async () => {
+  storage = ledger()
+  // A tool_use resent without the result that answered it is a request the API
+  // rejects outright, and a service-worker teardown between the two is exactly
+  // how the pair gets broken.
+  const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW.')])
+  await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'how did it go', today: '2026-08-25',
+    history: [{ q: 'and before that', a: 'nothing recorded.' }],
+    tools: ledgerTools('2026-08-25'),
+  })
+  for (const m of sent[0].messages) {
+    assert.equal(typeof m.content, 'string')
+    assert.equal('tool_calls' in m, false)
+  }
+})
+
+test('history is optional, so a first question is a first question', async () => {
+  storage = ledger()
+  const sent = stubApi([says('hi')])
+  await ask({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') })
+  assert.equal(sent[0].messages.length, 2)
+  assert.deepEqual(sent[0].messages[1], { role: 'user', content: 'hi' })
+})
+
+test('a command is not a question, and neither is a sticker', () => {
+  assert.equal(isQuestion('지난주 얼마야'), true)
+  // Anything with a slash on the front is a command. One this does not know is a
+  // typo the user is about to correct, and answering it would be paid for.
+  assert.equal(isQuestion('/today'), false)
+  assert.equal(isQuestion('/todya'), false)
+  // A photo, a sticker or a join notice arrives with no text at all.
+  assert.equal(isQuestion(''), false)
+  assert.equal(isQuestion('   '), false)
+})
+
+test('a conversation lapses after the window, but not while it is being had', () => {
+  const now = 1_800_000_000_000
+  const fresh = { at: now - 60_000, turns: [{ q: 'a', a: 'b' }] }
+  assert.deepEqual(freshTurns(fresh, now), [{ q: 'a', a: 'b' }])
+  // Half an hour on, the next question is a new subject; carrying the old one in
+  // would have the model answer about days nobody asked about, and pay to reread
+  // them.
+  assert.deepEqual(freshTurns({ ...fresh, at: now - HISTORY_TTL_MS - 1 }, now), [])
+  assert.deepEqual(freshTurns(null, now), [])
+
+  // Stamped at the last turn, so a conversation still going does not lapse
+  // however long it has been going.
+  const carried = nextTurns(fresh, now, 'c', 'd')
+  assert.equal(carried.at, now)
+  assert.deepEqual(carried.turns, [{ q: 'a', a: 'b' }, { q: 'c', a: 'd' }])
+  // A lapsed one starts over rather than resuming.
+  assert.deepEqual(nextTurns({ ...fresh, at: now - HISTORY_TTL_MS - 1 }, now, 'c', 'd').turns, [
+    { q: 'c', a: 'd' },
+  ])
+})
+
+test('only the last few exchanges are kept, because each one is resent', () => {
+  const now = 1_800_000_000_000
+  let stored = null
+  for (let i = 0; i < MAX_TURNS_KEPT + 3; i += 1) stored = nextTurns(stored, now, `q${i}`, `a${i}`)
+  assert.equal(stored.turns.length, MAX_TURNS_KEPT)
+  assert.equal(stored.turns[0].q, `q${3}`)
+  assert.equal(stored.turns.at(-1).q, `q${MAX_TURNS_KEPT + 2}`)
+})
+
+test('an inherited property name is a question, not a command', () => {
+  // "constructor" and "toString" answer truthy from a bare object lookup. With
+  // every non-command now going to the model, a sentence starting with one of
+  // them would be swallowed by the totals branch and silently never answered.
+  const SPANS = { '/today': 'totalToday', '/week': 'totalWeek', '/month': 'totalMonth' }
+  for (const word of ['constructor', 'tostring', 'valueof', '__proto__']) {
+    assert.equal(Object.hasOwn(SPANS, word), false, word)
+  }
+  assert.equal(Object.hasOwn(SPANS, '/today'), true)
+  // And they are questions, so they must reach the model rather than nothing.
+  assert.equal(isQuestion('constructor 관련 매출 알려줘'), true)
+})
+
+test('one clock for both ends of a call, so a live conversation cannot collapse', () => {
+  const now = 1_800_000_000_000
+  // Read at the start and again at the end, a conversation 29m58s old when the
+  // question went out is judged lapsed when the answer comes back, and the
+  // history it was answered from is thrown away mid-sentence.
+  const stored = { at: now - HISTORY_TTL_MS + 2_000, turns: [{ q: 'a', a: 'b' }] }
+  assert.equal(freshTurns(stored, now).length, 1)
+  assert.equal(nextTurns(stored, now, 'c', 'd').turns.length, 2)
+  // The collapse the shared clock avoids, shown with the clock read again later.
+  assert.equal(nextTurns(stored, now + 5_000, 'c', 'd').turns.length, 1)
+})
+
+test('a pasted URL reaches the same endpoint with or without its trailing slash', () => {
+  // Some gateways route a double slash and others answer it with a 404, and a
+  // pasted URL is as likely to carry one as not.
+  assert.equal(endpointFor('https://api.deepseek.com'), 'https://api.deepseek.com/chat/completions')
+  assert.equal(endpointFor('https://api.deepseek.com/'), 'https://api.deepseek.com/chat/completions')
+  assert.equal(endpointFor('https://api.openai.com/v1//'), 'https://api.openai.com/v1/chat/completions')
+})
+
+test('the tools go out in the shape this API names them', async () => {
+  storage = ledger()
+  const sent = stubApi([says('ok')])
+  await ask({
+    apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm',
+    question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+  })
+  const [tool] = sent[0].tools
+  assert.equal(tool.type, 'function')
+  assert.equal(tool.function.name, 'read_totals')
+  // Named parameters here, not input_schema — the ledger's own field has to
+  // match or the model is handed a tool it cannot call.
+  assert.equal(tool.function.parameters.required.join(), 'from,to')
+  assert.equal(sent[0].model, 'm')
+})
+
+test('a refusal with no readable body still names where it came from', async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 402, json: async () => ({}) })
+  await assert.rejects(
+    ask({
+      apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm',
+      question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+    }),
+    // Which host refused matters once the host is something the user chose.
+    /api\.example\.com 402/,
+  )
 })

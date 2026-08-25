@@ -20,6 +20,9 @@
   "secDisplay": {
     "message": "Message format"
   },
+  "secAi": {
+    "message": "Questions"
+  },
   "secSchedule": {
     "message": "Schedule"
   },
@@ -278,8 +281,29 @@
   "hintDailyTotal": {
     "message": "Adds a footer to every order message with what the day has announced so far. The bot answers /today and /month either way; this only controls the footer."
   },
+  "lblAiKey": {
+    "message": "API key"
+  },
+  "hintAiKey": {
+    "message": "Optional. With one set, anything you send the bot that is not a command is answered as a question about the totals it has kept — \"how did last week go, day by day\". Billed to you by whoever issued the key. Leave it blank and the bot stays silent unless you send it a command."
+  },
+  "lblAiBaseUrl": {
+    "message": "API base URL"
+  },
+  "hintAiBaseUrl": {
+    "message": "Any service that speaks the OpenAI chat-completions API. The default is OpenAI itself; DeepSeek, OpenRouter and anything running on your own machine work the same way, and are cheaper. Chrome will ask permission the first time you point this somewhere new."
+  },
+  "lblAiModel": {
+    "message": "Model"
+  },
+  "hintAiModel": {
+    "message": "The model name that service expects. Bigger is not better here — the answer is a few rows read back to you."
+  },
   "cmdHelp": {
     "message": "Send /today, /week or /month for a running total. /recount works a day out again from Play; /adjust corrects one by hand."
+  },
+  "cmdHelpAsk": {
+    "message": "Anything else you type here is answered as a question about the totals."
   },
   "totalDay": {
     "message": "$1 · $2 orders"
@@ -370,5 +394,41 @@
   },
   "hintBreakdown": {
     "message": "Adds a line with the tax withheld and, once Play reports enough to work it out, the exact rate of Google's cut — so the estimated net can be checked rather than trusted."
+  },
+  "cmdAiGaveUp": {
+    "message": "That took more looking up than one question gets. Try asking about a narrower stretch of days."
+  },
+  "cmdAiNothing": {
+    "message": "No answer came back. Try asking again."
+  },
+  "logAsked": {
+    "message": "a question"
+  },
+  "msgBadAiUrl": {
+    "message": "The API base URL has to start with https://"
+  },
+  "msgNeedAiModel": {
+    "message": "Enter the model name to use with that key."
+  },
+  "msgNeedAiHost": {
+    "message": "Chrome needs permission to reach that host. Save again and allow it, or clear the API key."
+  },
+  "btnTestAi": {
+    "message": "Ask a test question"
+  },
+  "msgNeedAiKey": {
+    "message": "Enter an API key first — that is what answers anything that is not a command."
+  },
+  "msgSaveAiFirst": {
+    "message": "Save first, then test. This asks with what is stored, not with what is typed."
+  },
+  "msgAsking": {
+    "message": "Asking $1…"
+  },
+  "msgAiAnswered": {
+    "message": "It answered:\n\n$1"
+  },
+  "cmdAiProbe": {
+    "message": "How much has today brought in so far?"
   }
 }

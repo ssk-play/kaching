@@ -13,6 +13,15 @@ const say = (text, cls = '') => {
   log.className = cls
 }
 
+// The question test answers beside the fields it tests. Sent to the page footer
+// instead, a multi-line answer would appear somewhere the reader is not looking
+// after clicking a button halfway up the page.
+const sayAi = (text, cls = '') => {
+  const out = $('aiLog')
+  out.textContent = text
+  out.className = cls
+}
+
 // ------------------------------------------------------------------------ i18n
 
 document.title = t('optTitle')
@@ -27,7 +36,9 @@ const CHECKBOXES = [
   'showDailyTotal', 'verbose',
 ]
 const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
-const TEXTS = ['botToken', 'chatId', 'senderName', 'consoleUrl', 'packages']
+const TEXTS = [
+  'botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey', 'aiBaseUrl', 'aiModel',
+]
 
 function fill(settings) {
   for (const id of TEXTS) $(id).value = settings[id]
@@ -107,11 +118,35 @@ const ask = async (type, extra = {}) => {
 
 // ---------------------------------------------------------------------- actions
 
+// The default host is in the manifest, so the common case never prompts. Any
+// other one has to be asked for: a manifest broad enough to cover every
+// OpenAI-compatible endpoint in advance would be asking for the whole web at
+// install time, to reach one host the user has not chosen yet.
+//
+// Called before anything is awaited. Chrome grants this only during a user
+// gesture, and an await ahead of it spends the click.
+function grantFor(baseUrl) {
+  let origin
+  try {
+    origin = `${new URL(baseUrl).origin}/*`
+  } catch {
+    return null
+  }
+  return chrome.permissions.request({ origins: [origin] })
+}
+
 $('save').addEventListener('click', async () => {
   const values = read()
   if (values.consoleUrl && !values.developerId) return say(t('msgBadUrl'), 'err')
   if (values.botToken && !/^\d+:[\w-]{30,}$/.test(values.botToken)) {
     return say(t('msgBadToken'), 'err')
+  }
+  // Only worth asking for when there is a key to use it with. Someone who never
+  // fills that field is never prompted about a host they will not reach.
+  if (values.aiKey) {
+    if (!/^https:\/\//.test(values.aiBaseUrl)) return say(t('msgBadAiUrl'), 'err')
+    if (!values.aiModel) return say(t('msgNeedAiModel'), 'err')
+    if (!(await grantFor(values.aiBaseUrl))) return say(t('msgNeedAiHost'), 'err')
   }
   await chrome.storage.local.set(values)
   await ask('rearm')
@@ -140,6 +175,34 @@ $('test').addEventListener('click', async () => {
   say(t('msgChecking'))
   const res = await ask('test')
   say(res.ok ? t('msgTestSent') : res.error, res.ok ? 'ok' : 'err')
+})
+
+// Asks the model a real question over the real path, rather than pinging the
+// host: a key that authenticates against a model that does not exist, or a
+// service that authenticates but cannot call a tool, both look fine to a ping
+// and answer nothing in the chat.
+//
+// Reads what was saved, not what is typed. The permission for a non-default host
+// is granted on save, so a URL that has not been saved is one this could not
+// reach anyway — and saying "save first" is clearer than a fetch that fails.
+$('testAi').addEventListener('click', async () => {
+  const saved = await load()
+  if (!saved.aiKey) return sayAi(t('msgNeedAiKey'), 'err')
+  if (saved.aiKey !== $('aiKey').value.trim()
+    || saved.aiBaseUrl !== $('aiBaseUrl').value.trim()
+    || saved.aiModel !== $('aiModel').value.trim()) {
+    return sayAi(t('msgSaveAiFirst'), 'err')
+  }
+  // Checked here rather than left to the fetch, which fails with a network error
+  // that says nothing about which of the two things went wrong.
+  const origin = `${new URL(saved.aiBaseUrl).origin}/*`
+  if (!(await chrome.permissions.contains({ origins: [origin] }))) {
+    return sayAi(t('msgNeedAiHost'), 'err')
+  }
+
+  sayAi(t('msgAsking', saved.aiModel))
+  const res = await ask('testAi')
+  sayAi(res.ok ? t('msgAiAnswered', res.result) : res.error, res.ok ? 'ok' : 'err')
 })
 
 $('checkNow').addEventListener('click', async () => {

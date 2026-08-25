@@ -20,6 +20,9 @@
   "secDisplay": {
     "message": "메시지 형식"
   },
+  "secAi": {
+    "message": "질문"
+  },
   "secSchedule": {
     "message": "확인 주기"
   },
@@ -278,8 +281,29 @@
   "hintDailyTotal": {
     "message": "주문 메시지마다 그날 알린 누계를 한 줄로 덧붙입니다. /today · /month 응답은 이 설정과 무관하게 동작하며, 여기서는 푸터만 켜고 끕니다."
   },
+  "lblAiKey": {
+    "message": "API 키"
+  },
+  "hintAiKey": {
+    "message": "선택 사항입니다. 키를 넣으면 명령어가 아닌 말은 모두 누계에 대한 질문으로 답합니다 — \"지난주 일별 수익 알려줘\" 처럼요. 요금은 키를 발급한 곳에서 본인에게 청구합니다. 비워 두면 명령어에만 답합니다."
+  },
+  "lblAiBaseUrl": {
+    "message": "API 주소"
+  },
+  "hintAiBaseUrl": {
+    "message": "OpenAI chat-completions 형식을 쓰는 서비스면 무엇이든 됩니다. 기본값은 OpenAI 이고, DeepSeek 이나 OpenRouter, 내 컴퓨터에서 돌리는 것도 같은 방식이며 더 쌉니다. 새로운 주소를 처음 넣으면 Chrome 이 권한을 묻습니다."
+  },
+  "lblAiModel": {
+    "message": "모델"
+  },
+  "hintAiModel": {
+    "message": "그 서비스에서 쓰는 모델 이름. 여기서는 큰 모델이 더 낫지 않습니다 — 읽어 온 몇 줄을 그대로 말해 주는 일이니까요."
+  },
   "cmdHelp": {
     "message": "/today · /week · /month 는 누계를 알려줍니다. /recount 는 특정 날짜를 Play 에서 다시 계산하고, /adjust 는 직접 보정합니다."
+  },
+  "cmdHelpAsk": {
+    "message": "명령어가 아닌 말은 누계에 대한 질문으로 알아듣고 답합니다."
   },
   "totalDay": {
     "message": "$1 · $2건"
@@ -370,5 +394,41 @@
   },
   "hintBreakdown": {
     "message": "원천 세금과, 구글이 정산 내역을 내려주면 실제 수수료율까지 한 줄로 덧붙입니다. 예상 순수익을 믿는 대신 검산할 수 있습니다."
+  },
+  "cmdAiGaveUp": {
+    "message": "한 번의 질문으로 찾아보기엔 범위가 너무 넓었습니다. 기간을 좁혀서 다시 물어봐 주세요."
+  },
+  "cmdAiNothing": {
+    "message": "답을 받지 못했습니다. 다시 물어봐 주세요."
+  },
+  "logAsked": {
+    "message": "질문"
+  },
+  "msgBadAiUrl": {
+    "message": "API 주소는 https:// 로 시작해야 합니다."
+  },
+  "msgNeedAiModel": {
+    "message": "그 키로 사용할 모델 이름을 입력하세요."
+  },
+  "msgNeedAiHost": {
+    "message": "그 주소에 접속하려면 Chrome 권한이 필요합니다. 다시 저장하고 허용하거나, API 키를 비워 주세요."
+  },
+  "btnTestAi": {
+    "message": "질문 테스트"
+  },
+  "msgNeedAiKey": {
+    "message": "먼저 API 키를 입력하세요 — 명령어가 아닌 말에 답하는 게 그 키입니다."
+  },
+  "msgSaveAiFirst": {
+    "message": "먼저 저장한 뒤 테스트하세요. 입력한 값이 아니라 저장된 값으로 물어봅니다."
+  },
+  "msgAsking": {
+    "message": "$1 에 물어보는 중…"
+  },
+  "msgAiAnswered": {
+    "message": "이렇게 답했습니다:\n\n$1"
+  },
+  "cmdAiProbe": {
+    "message": "오늘 지금까지 얼마 벌었어?"
   }
 }
