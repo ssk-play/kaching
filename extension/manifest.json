@@ -15,7 +15,7 @@
     "https://play.google.com/*",
     "https://playconsolemonetization-pa.clients6.google.com/*",
     "https://api.telegram.org/*",
-    "https://api.deepseek.com/*"
+    "https://api.openai.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],
   "declarative_net_request": {

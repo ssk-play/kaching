@@ -31,8 +31,8 @@ export const DEFAULTS = {
   // box; changing them points this at OpenAI, at a gateway, or at something on
   // the user's own machine.
   aiKey: '',
-  aiBaseUrl: 'https://api.deepseek.com',
-  aiModel: 'deepseek-v4-flash',
+  aiBaseUrl: 'https://api.openai.com/v1',
+  aiModel: 'gpt-4o-mini',
 
   // schedule
   intervalMinutes: 10,

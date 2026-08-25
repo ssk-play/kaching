@@ -17,7 +17,7 @@ operator other than you.
 | Order records from your Play Console (order ID, product, package name, buyer country, amount, timestamp, state) | To build the notification | Sent only to the Telegram bot **you** configured |
 | Your Telegram bot token and chat ID | To deliver the notification | Stored locally in the browser; sent only to `api.telegram.org` |
 | Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount` and `/adjust` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
-| Messages that are not one of those commands, and the daily totals needed to answer them | To answer a question about the totals in plain words | **Only if you set an API key.** Sent to the API service you chose in the settings — DeepSeek by default, or any OpenAI-compatible service you point it at — on your own key and your own bill. With no key set, no request is ever made and such messages are ignored entirely. That service's own privacy policy governs what it receives. |
+| Messages that are not one of those commands, and the daily totals needed to answer them | To answer a question about the totals in plain words | **Only if you set an API key.** Sent to the API service you chose in the settings — OpenAI by default, or any OpenAI-compatible service you point it at — on your own key and your own bill. With no key set, no request is ever made and such messages are ignored entirely. That service's own privacy policy governs what it receives. |
 | Your API key | To make that request | Stored locally in the browser; sent only to the API service you chose |
 
 ## What it does not do
@@ -57,8 +57,8 @@ in @BotFather.
 Answering in plain words is off unless you enter an API key. With one entered,
 any message you send the bot that is not one of its commands — along with the
 daily totals needed to answer it — is sent to the service named in the **API
-base URL** setting, under your own account there. The default is DeepSeek
-(`api.deepseek.com`); you may point it at any service speaking the OpenAI
+base URL** setting, under your own account there. The default is OpenAI
+(`api.openai.com`); you may point it at any service speaking the OpenAI
 chat-completions API, including one on your own machine. That service's privacy
 policy governs the data, not this one. Delete the key in the settings to turn
 the feature off again; the bot then answers commands only.

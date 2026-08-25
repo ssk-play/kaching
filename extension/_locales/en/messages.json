@@ -291,7 +291,7 @@
     "message": "API base URL"
   },
   "hintAiBaseUrl": {
-    "message": "Any service that speaks the OpenAI chat-completions API. The default is DeepSeek, the cheapest that answers well enough here; https://api.openai.com/v1 and OpenRouter work the same way, as does anything running on your own machine. Chrome will ask permission the first time you point this somewhere new."
+    "message": "Any service that speaks the OpenAI chat-completions API. The default is OpenAI itself; DeepSeek, OpenRouter and anything running on your own machine work the same way, and are cheaper. Chrome will ask permission the first time you point this somewhere new."
   },
   "lblAiModel": {
     "message": "Model"

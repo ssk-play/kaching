@@ -2,9 +2,9 @@
 //
 // Spoken to over the OpenAI chat-completions shape rather than any one vendor's
 // own. It is what nearly every provider now offers, so the setting is a URL
-// instead of a brand: DeepSeek by default because it is cheap enough not to
-// think about, OpenAI or OpenRouter or something running on the user's own
-// machine by changing one field.
+// instead of a brand: OpenAI by default because it is the one everybody already
+// has an account with, and a gateway, a cheaper provider or something running on
+// the reader's own machine by changing one field.
 //
 // Raw fetch rather than an SDK for the same reason telegram.js is: this
 // extension has no build step, and a bundler earns its place somewhere other

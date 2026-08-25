@@ -291,7 +291,7 @@
     "message": "API 주소"
   },
   "hintAiBaseUrl": {
-    "message": "OpenAI chat-completions 형식을 쓰는 서비스면 무엇이든 됩니다. 기본값은 이 용도에 충분하면서 가장 싼 DeepSeek 이고, https://api.openai.com/v1 이나 OpenRouter 도 같은 방식이며 내 컴퓨터에서 돌리는 것도 됩니다. 새로운 주소를 처음 넣으면 Chrome 이 권한을 묻습니다."
+    "message": "OpenAI chat-completions 형식을 쓰는 서비스면 무엇이든 됩니다. 기본값은 OpenAI 이고, DeepSeek 이나 OpenRouter, 내 컴퓨터에서 돌리는 것도 같은 방식이며 더 쌉니다. 새로운 주소를 처음 넣으면 Chrome 이 권한을 묻습니다."
   },
   "lblAiModel": {
     "message": "모델"

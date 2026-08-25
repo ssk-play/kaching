@@ -55,9 +55,9 @@ service you pointed it at, on your key and your bill. With no key set the bot
 answers commands and nothing else, exactly as before.
 
 The service is a URL, not a brand: anything speaking the OpenAI
-chat-completions API works. It ships pointed at DeepSeek, which is cheap enough
-not to think about; `https://api.openai.com/v1`, OpenRouter and a model running
-on your own machine are the same three fields. Chrome asks permission the first
+chat-completions API works. It ships pointed at OpenAI, the account most
+people already have; DeepSeek, OpenRouter and a model running on your own
+machine are the same three fields. Chrome asks permission the first
 time you point it somewhere new.
 
 In a private chat that is only what you type. **In a group, check what Telegram
@@ -88,8 +88,8 @@ that day supersedes them.
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
 | API key | — | Optional; lets the bot answer anything that is not a command |
-| API base URL | DeepSeek | Any OpenAI-compatible service |
-| Model | `deepseek-v4-flash` | Whatever that service calls it |
+| API base URL | `https://api.openai.com/v1` | Any OpenAI-compatible service |
+| Model | `gpt-4o-mini` | Whatever that service calls it |
 | Check every | 10 min | Only runs while Chrome is open |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |
