@@ -24,6 +24,9 @@ export const DEFAULTS = {
   showBreakdown: false,
   showDailyTotal: true,
 
+  // questions
+  aiKey: '',
+
   // schedule
   intervalMinutes: 10,
   days: 2,

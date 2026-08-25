@@ -27,7 +27,7 @@ const CHECKBOXES = [
   'showDailyTotal', 'verbose',
 ]
 const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
-const TEXTS = ['botToken', 'chatId', 'senderName', 'consoleUrl', 'packages']
+const TEXTS = ['botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey']
 
 function fill(settings) {
   for (const id of TEXTS) $(id).value = settings[id]

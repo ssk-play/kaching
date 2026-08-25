@@ -1,6 +1,6 @@
 # Privacy Policy — Kaching
 
-_Last updated: 2026-08-22_
+_Last updated: 2026-08-25_
 
 Published at **https://apps.sskplay.com/privacy/webstore/** — that is the URL to
 give the Chrome Web Store dashboard. This file is the source; keep the two in
@@ -16,14 +16,17 @@ operator other than you.
 | Your Google Play Console session cookie (`SAPISID`) | To sign the request to Play's own orders endpoint, exactly as the Console page does | Never leaves your browser. It is used to compute a one-way hash sent to Google only. |
 | Order records from your Play Console (order ID, product, package name, buyer country, amount, timestamp, state) | To build the notification | Sent only to the Telegram bot **you** configured |
 | Your Telegram bot token and chat ID | To deliver the notification | Stored locally in the browser; sent only to `api.telegram.org` |
-| Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount` and `/adjust` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
+| Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount`, `/adjust` and `/ai` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
+| Your `/ai` question, and the daily totals needed to answer it | To answer a question the fixed commands do not cover | **Only if you set an Anthropic API key.** Sent to `api.anthropic.com` on your own key and your own bill. Nothing is sent there until you ask, and no key means no request is ever made. Anthropic's own privacy policy governs what it receives. |
+| Your Anthropic API key | To make that request | Stored locally in the browser; sent only to `api.anthropic.com` |
 
 ## What it does not do
 
 - No analytics, telemetry, tracking, or crash reporting.
-- No data is sent to the developer of this extension or to any third party.
+- No data is sent to the developer of this extension.
 - Nothing is transmitted anywhere except Google (the request you would make by
-  opening the Console yourself) and the Telegram bot you chose.
+  opening the Console yourself), the Telegram bot you chose, and — only if you
+  set an API key and only when you send `/ai` — Anthropic.
 - No data is sold, rented, or shared. No advertising.
 - Individual order records are not retained. What is kept locally is a rolling
   list of recently seen order IDs (so the same order is not announced twice and
@@ -38,13 +41,21 @@ operator other than you.
 
 In `chrome.storage.local` on your own machine. Uninstalling the extension
 removes it. **Reset history** in the settings clears all of it — seen orders,
-daily tallies, learned rates and the payout currency.
+daily tallies, learned rates and the payout currency. Clearing the Anthropic API
+key field and saving removes the key.
 
 ## Your Telegram bot
 
 Kaching sends messages through a bot you create. Telegram's own privacy policy
 governs those messages once delivered. Revoke access at any time with `/revoke`
 in @BotFather.
+
+## Anthropic
+
+`/ai` is off unless you enter an API key. With one entered, the question you
+send and the daily totals needed to answer it are sent to Anthropic's API under
+your own account. Anthropic's privacy policy governs that data. Delete the key
+in the settings to turn the feature off again.
 
 ## Contact
 

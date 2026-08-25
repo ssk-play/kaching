@@ -20,6 +20,9 @@
   "secDisplay": {
     "message": "메시지 형식"
   },
+  "secAi": {
+    "message": "질문"
+  },
   "secSchedule": {
     "message": "확인 주기"
   },
@@ -278,8 +281,14 @@
   "hintDailyTotal": {
     "message": "주문 메시지마다 그날 알린 누계를 한 줄로 덧붙입니다. /today · /month 응답은 이 설정과 무관하게 동작하며, 여기서는 푸터만 켜고 끕니다."
   },
+  "lblAiKey": {
+    "message": "Anthropic API 키"
+  },
+  "hintAiKey": {
+    "message": "선택 사항입니다. 키를 넣으면 /ai 로 누계에 대해 자유롭게 물어볼 수 있습니다. console.anthropic.com 에서 발급하며 요금은 본인에게 청구됩니다. 비워 두어도 나머지 명령은 그대로 동작합니다."
+  },
   "cmdHelp": {
-    "message": "/today · /week · /month 는 누계를 알려줍니다. /recount 는 특정 날짜를 Play 에서 다시 계산하고, /adjust 는 직접 보정합니다."
+    "message": "/today · /week · /month 는 누계를 알려줍니다. /recount 는 특정 날짜를 Play 에서 다시 계산하고, /adjust 는 직접 보정합니다. API 키를 넣어 두었다면 /ai 로 누계에 대해 자유롭게 물어볼 수 있습니다."
   },
   "totalDay": {
     "message": "$1 · $2건"
@@ -370,5 +379,17 @@
   },
   "hintBreakdown": {
     "message": "원천 세금과, 구글이 정산 내역을 내려주면 실제 수수료율까지 한 줄로 덧붙입니다. 예상 순수익을 믿는 대신 검산할 수 있습니다."
+  },
+  "cmdAiUsage": {
+    "message": "질문을 함께 보내세요: /ai 지난주 일별 수익 알려줘"
+  },
+  "cmdAiNeedKey": {
+    "message": "Anthropic API 키가 설정되어 있지 않습니다. /ai 를 쓰려면 확장 설정에서 키를 넣어 주세요."
+  },
+  "cmdAiGaveUp": {
+    "message": "한 번의 질문으로 찾아보기엔 범위가 너무 넓었습니다. 기간을 좁혀서 다시 물어봐 주세요."
+  },
+  "cmdAiNothing": {
+    "message": "답을 받지 못했습니다. 다시 물어봐 주세요."
   }
 }

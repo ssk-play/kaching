@@ -39,6 +39,9 @@ phone beyond Telegram itself.
   answers within seconds
 - `/recount` works a day out again from Play and writes the result back, and
   `/adjust -6500` patches a day by hand, either direction, any day
+- `/ai` answers a question the fixed commands do not cover — "how did last week
+  go, day by day" — by reading the same tally. Optional, off until you enter
+  your own Anthropic API key, and read-only: it cannot change a figure
 
 **What you can control**
 
@@ -81,15 +84,18 @@ Kaching is not affiliated with Google or Telegram.
 | Host: `play.google.com` | Reads the session cookie used to sign the request. |
 | Host: `playconsolemonetization-pa.clients6.google.com` | The Play Console orders endpoint the extension reads from. |
 | Host: `api.telegram.org` | Delivers the notification to the bot the user configured. |
+| Host: `api.anthropic.com` | Answers the optional `/ai` command, using an API key the user supplies. No request is made unless the user has entered a key and sent an `/ai` question. |
 
 ## Data usage disclosures
 
 - **Does not** collect personally identifiable information beyond what the user
-  enters (Telegram bot token and chat ID), which stays on the user's machine.
+  enters (Telegram bot token, chat ID and an optional Anthropic API key), which
+  stays on the user's machine.
 - **Does not** collect health, financial, authentication, personal
   communications, location, web history, or user activity data for the
   developer. Order data is read and forwarded only to the user's own Telegram
-  chat.
+  chat, and — where the user has enabled `/ai` with their own API key — to
+  Anthropic's API to answer the question they asked.
 - **Not** sold or transferred to third parties.
 - **Not** used for purposes unrelated to the single purpose above.
 - **Not** used for creditworthiness or lending.

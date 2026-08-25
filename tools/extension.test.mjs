@@ -13,7 +13,11 @@ const messages = JSON.parse(fs.readFileSync(path.join(EXT, '_locales/en/messages
 
 // Stub only what these modules touch, and back i18n with the real catalogue so a
 // renamed or missing key fails here rather than in the store build.
+// Storage is stubbed per test by whatever needs it; the default is an install
+// that has never counted anything.
+let storage = {}
 globalThis.chrome = {
+  storage: { local: { get: async (defaults) => ({ ...defaults, ...storage }) } },
   i18n: {
     getMessage: (key, subs = []) => {
       const raw = messages[key]?.message
@@ -35,6 +39,8 @@ const T = await load('totals.js')
 const { chatsIn } = await load('telegram.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
+const { rangeOf, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
+const { ask, textOf } = await load('llm.js')
 
 const order = (over = {}) => ({
   id: 'GPA.1111-2222-3333-44444',
@@ -805,4 +811,249 @@ test('the week reads the same sentence as the day and the month', () => {
   const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 }
   assert.equal(totalLine('totalWeek', totals), 'This week KRW 8,000 · 2 orders')
   assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week KRW 8,000 · 1 order')
+})
+
+// -------------------------------------------------------------- /ai
+
+// A tally with two selling days, a gap, and a correction on one of them.
+const ledger = () => {
+  const krw = (amount) => ({ currency: 'KRW', amount })
+  let totals = {}
+  totals = T.record(totals, '2026-08-20', { net: krw(1000), currency: 'KRW' })
+  totals = T.record(totals, '2026-08-22', { net: krw(4000), currency: 'KRW' })
+  const adjustments = T.adjust({}, '2026-08-22', { currency: 'KRW', amount: -500 })
+  return { totals, adjustments }
+}
+
+test('the ledger read reports a day that sold nothing, not just the days that did', () => {
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
+  assert.deepEqual(
+    out.days.map((d) => [d.day, d.amount ?? 0]),
+    [
+      ['2026-08-20', 1000],
+      ['2026-08-21', 0],
+      // The hand-entered correction is read together with the tally, exactly as
+      // /today reads it. A model told 4,000 here would contradict the command.
+      ['2026-08-22', 3500],
+    ],
+  )
+})
+
+test('the ledger read says nothing about days before the tally began', () => {
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
+  // Not zeroes: those days have no entry because nothing was counting yet, and
+  // reporting them as zero would be reporting a drought that never happened.
+  assert.equal(out.since, '2026-08-20')
+  assert.equal(out.days[0].day, '2026-08-20')
+  assert.equal(out.days.length, 3)
+})
+
+test('an empty tally is said to be empty rather than answered with zeroes', () => {
+  const out = rangeOf({}, {}, { from: '2026-08-01', to: '2026-08-02' }, '2026-08-25')
+  assert.deepEqual(out.days, [])
+  assert.equal(out.since, null)
+  assert.ok(out.note)
+})
+
+test('a range reaching into the future is trimmed to today, not refused', () => {
+  const { totals, adjustments } = ledger()
+  // "this week" ends on Saturday; the question is still about the days that have
+  // happened, so the days that have not are simply not there.
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-31' }, '2026-08-21')
+  assert.equal(out.days.at(-1).day, '2026-08-21')
+  // A range that is entirely in the future has nothing to trim to.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-09-01', to: '2026-09-02' }, '2026-08-21').error)
+})
+
+test('an over-long range comes back as something the model can act on', () => {
+  // A tally that really does hold a year: the floor moves nothing, so the cap is
+  // what stands between one question and a year of rows.
+  const old = T.record({}, '2026-01-01', { net: { currency: 'KRW', amount: 100 }, currency: 'KRW' })
+  const out = rangeOf(old, {}, { from: '2026-01-01', to: '2026-12-31' }, '2026-12-31')
+  assert.match(out.error, new RegExp(String(MAX_RANGE_DAYS)))
+  assert.ok(!out.days)
+  // A malformed date is refused the same way rather than throwing into the loop.
+  assert.ok(rangeOf({}, {}, { from: 'last monday', to: '2026-08-22' }, '2026-08-25').error)
+})
+
+test('the cap counts the rows that would be emitted, not the years asked about', () => {
+  // "How did this year go" against a days-old install is a handful of rows. The
+  // refusal would cost a turn teaching the model a start date it does not name.
+  const { totals, adjustments } = ledger()
+  const out = rangeOf(totals, adjustments, { from: '2026-01-01', to: '2026-08-25' }, '2026-08-25')
+  assert.ok(!out.error)
+  assert.equal(out.days.length, 6)
+  assert.ok(out.days.length <= MAX_RANGE_DAYS)
+})
+
+// One canned exchange per fetch, so a test says exactly how many turns it expects.
+function stubApi(replies) {
+  const sent = []
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body))
+    const reply = replies.shift()
+    if (!reply) throw new Error('unexpected extra request')
+    return { ok: true, json: async () => reply }
+  }
+  return sent
+}
+
+const says = (text) => ({ stop_reason: 'end_turn', content: [{ type: 'text', text }] })
+const reads = (input) => ({
+  stop_reason: 'tool_use',
+  content: [{ type: 'tool_use', id: 'tu_1', name: 'read_totals', input }],
+})
+
+test('the model is handed the figures it asked for and its answer comes back', async () => {
+  storage = ledger()
+  const sent = stubApi([reads({ from: '2026-08-20', to: '2026-08-22' }), says('3,500 KRW on the 22nd.')])
+  const out = await ask({
+    apiKey: 'k', question: 'how did last week go', today: '2026-08-25',
+    tools: ledgerTools('2026-08-25'),
+  })
+  assert.equal(out, '3,500 KRW on the 22nd.')
+
+  // Every tool result rides in one user message. Split across several, the model
+  // learns to stop asking for more than one thing at a time.
+  const results = sent[1].messages.at(-1)
+  assert.equal(results.role, 'user')
+  assert.equal(results.content.length, 1)
+  assert.equal(results.content[0].tool_use_id, 'tu_1')
+  assert.match(results.content[0].content, /2026-08-22/)
+  // The assistant turn goes back whole: stripped to its prose, the tool_use
+  // block the result answers would be pointing at nothing.
+  assert.equal(sent[1].messages[1].content[0].type, 'tool_use')
+})
+
+test('a tool the model invents is reported to it instead of losing the question', async () => {
+  storage = ledger()
+  const sent = stubApi([
+    { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu_9', name: 'write_totals', input: {} }] },
+    says('I can only read the tally.'),
+  ])
+  assert.equal(
+    await ask({ apiKey: 'k', question: 'set today to 0', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    'I can only read the tally.',
+  )
+  assert.equal(sent[1].messages.at(-1).content[0].is_error, true)
+})
+
+test('a model that keeps reading is cut off rather than left to spend', async () => {
+  storage = ledger()
+  stubApi(Array.from({ length: 8 }, () => reads({ from: '2026-08-20', to: '2026-08-22' })))
+  const out = await ask({
+    apiKey: 'k', question: 'how did it go', today: '2026-08-25', tools: ledgerTools('2026-08-25'),
+  })
+  // Said plainly. A summary here would be a summary of figures it had not
+  // finished gathering.
+  assert.equal(out, messages.cmdAiGaveUp.message)
+})
+
+test('the API says why it refused, and that reaches the chat', async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    json: async () => ({ error: { message: 'credit balance is too low' } }),
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    // An expired key and a spent balance are different problems with different
+    // fixes; the status code alone tells the reader neither.
+    /credit balance is too low/,
+  )
+})
+
+test('a body that fails to arrive is a failure, not an empty answer', async () => {
+  // The timeout firing mid-body leaves an ok response whose json() rejects.
+  // Reported as nothing-came-back, it would send the reader off to ask again
+  // rather than to look at their network.
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => {
+      throw new Error('The operation was aborted due to timeout')
+    },
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    /aborted due to timeout/,
+  )
+  // A refusal is still allowed a body this cannot read: the status says enough.
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 529,
+    json: async () => {
+      throw new Error('not json')
+    },
+  })
+  await assert.rejects(
+    ask({ apiKey: 'k', question: 'hi', today: '2026-08-25', tools: ledgerTools('2026-08-25') }),
+    /529/,
+  )
+})
+
+test('only the prose is answered with, and an empty reply is not silence', () => {
+  assert.equal(
+    textOf([{ type: 'tool_use', id: 'x' }, { type: 'text', text: ' 3,500 KRW ' }]),
+    '3,500 KRW',
+  )
+  assert.equal(textOf([]), '')
+})
+
+test('a correction earlier than the first announced order is not clipped out', () => {
+  const { totals } = ledger()
+  // /adjust takes any past day, so a correction can predate everything the bot
+  // announced. /today, /week and /month all count it; a floor read off the
+  // announced days alone would leave /ai contradicting them.
+  const adjustments = T.adjust({}, '2026-08-10', { currency: 'KRW', amount: 9000 })
+  const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
+  assert.equal(out.since, '2026-08-10')
+  assert.equal(out.days[0].day, '2026-08-10')
+  assert.equal(out.days[0].amount, 9000)
+
+  // The sharp case: a tally with nothing announced at all still has the
+  // correction to report, and saying it has no days would contradict /today.
+  const only = rangeOf({}, adjustments, { from: '2026-08-01', to: '2026-08-10' }, '2026-08-25')
+  assert.deepEqual(only.days, [{ day: '2026-08-10', currency: 'KRW', amount: 9000, orders: 0 }])
+})
+
+test('a day that never happened is refused, not walked past', () => {
+  const { totals, adjustments } = ledger()
+  // 2026-04-31 is shape-perfect and parses as May 1st, so walking from it would
+  // report a day that never existed and step straight over the one that did.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-04-31', to: '2026-05-05' }, '2026-08-25').error)
+  // Month 13 and day 32 do not parse at all; the answer is the same refusal
+  // rather than a RangeError thrown into the loop.
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-13-01', to: '2026-05-05' }, '2026-08-25').error)
+  assert.ok(rangeOf(totals, adjustments, { from: '2026-05-32', to: '2026-06-05' }, '2026-08-25').error)
+  // A real leap day is not turned away with them.
+  assert.ok(!rangeOf(totals, adjustments, { from: '2024-02-29', to: '2024-03-01' }, '2026-08-25').error)
+})
+
+test('a bucket key that does not parse cannot take every question down', () => {
+  // /adjust validates the shape of a day, not that it exists, so "2026-00-15"
+  // can reach storage. startedAt reads NaN off it and new Date(NaN) throws —
+  // which would make every /ai question fail while /today, /week and /month,
+  // which match by prefix, kept looking healthy.
+  const { totals } = ledger()
+  const adjustments = T.adjust({}, '2026-00-15', { currency: 'KRW', amount: 5000 })
+  const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
+  assert.equal(out.since, '2026-08-20')
+  assert.equal(out.days.length, 3)
+})
+
+test('a range written backwards is told so, not told the days are in the future', () => {
+  const { totals, adjustments } = ledger()
+  const back = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-20' }, '2026-08-25')
+  // Told the days had not happened yet, the model's only move is to reach
+  // further back — which fails the same way until the turns run out.
+  assert.match(back.error, /on or before/)
+})
+
+test('one day reads the same whether /today or /ai asks for it', () => {
+  const { totals, adjustments } = ledger()
+  // The whole point of the shared fold: two answers about the same date cannot
+  // come from two expressions that could drift apart.
+  const row = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-22' }, '2026-08-25').days[0]
+  assert.equal(row.amount, T.dayOf(totals, adjustments, '2026-08-22').amount)
 })

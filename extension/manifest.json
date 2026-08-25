@@ -14,7 +14,8 @@
   "host_permissions": [
     "https://play.google.com/*",
     "https://playconsolemonetization-pa.clients6.google.com/*",
-    "https://api.telegram.org/*"
+    "https://api.telegram.org/*",
+    "https://api.anthropic.com/*"
   ],
   "declarative_net_request": {
     "rule_resources": [

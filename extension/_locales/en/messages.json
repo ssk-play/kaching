@@ -20,6 +20,9 @@
   "secDisplay": {
     "message": "Message format"
   },
+  "secAi": {
+    "message": "Questions"
+  },
   "secSchedule": {
     "message": "Schedule"
   },
@@ -278,8 +281,14 @@
   "hintDailyTotal": {
     "message": "Adds a footer to every order message with what the day has announced so far. The bot answers /today and /month either way; this only controls the footer."
   },
+  "lblAiKey": {
+    "message": "Anthropic API key"
+  },
+  "hintAiKey": {
+    "message": "Optional. With one set, the bot answers /ai — a question in plain words about the totals it has kept. Created at console.anthropic.com; billed to you. Leave it blank and every other command works exactly as before."
+  },
   "cmdHelp": {
-    "message": "Send /today, /week or /month for a running total. /recount works a day out again from Play; /adjust corrects one by hand."
+    "message": "Send /today, /week or /month for a running total. /recount works a day out again from Play; /adjust corrects one by hand. /ai answers a question about the totals in plain words, if an API key is set."
   },
   "totalDay": {
     "message": "$1 · $2 orders"
@@ -370,5 +379,17 @@
   },
   "hintBreakdown": {
     "message": "Adds a line with the tax withheld and, once Play reports enough to work it out, the exact rate of Google's cut — so the estimated net can be checked rather than trusted."
+  },
+  "cmdAiUsage": {
+    "message": "Ask a question with it: /ai how did last week go, day by day"
+  },
+  "cmdAiNeedKey": {
+    "message": "No Anthropic API key is set. Add one in the extension's settings to use /ai."
+  },
+  "cmdAiGaveUp": {
+    "message": "That took more looking up than one question gets. Try asking about a narrower stretch of days."
+  },
+  "cmdAiNothing": {
+    "message": "No answer came back. Try asking again."
   }
 }

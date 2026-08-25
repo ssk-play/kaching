@@ -1,5 +1,5 @@
 import {
-  send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands,
+  send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands, MENU_VERSION,
 } from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured } from './settings.js'
@@ -9,8 +9,10 @@ import { ratesFrom, merge, payoutCurrency } from './fx.js'
 import {
   record as tally, sum as sumTotals, sumRange, trim as trimTotals,
   remember as rememberCharge, amountFor, startedAt, adjust, combine,
-  dayKey, monthKey, weekStart,
+  dayKey, monthKey, weekStart, dayOf, DAY,
 } from './totals.js'
+import { ask } from './llm.js'
+import { tools as ledgerTools } from './ledger.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
 import { record, recordOnce, clear as clearLog } from './log.js'
@@ -112,7 +114,7 @@ function publishMenu() {
 async function registerMenu() {
   const { botToken, chatId } = await load()
   if (!botToken || !chatId) return
-  const key = `${botToken}:${chatId}`
+  const key = `${botToken}:${chatId}:${MENU_VERSION}`
   const { menuFor } = await chrome.storage.local.get({ menuFor: null })
   if (menuFor === key) return
   try {
@@ -283,9 +285,11 @@ async function waitForCommands(s) {
           ? // A fetch of its own, so an expired Console session says so here
             // rather than answering with a silent zero.
             await recount(s, arg).catch((err) => t('tgFailOther', String(err?.message ?? err)))
-          : cmd === '/start' || cmd === '/help'
-            ? t('cmdHelp')
-            : null
+          : cmd === '/ai'
+            ? await answerQuestion(s, arg)
+            : cmd === '/start' || cmd === '/help'
+              ? t('cmdHelp')
+              : null
     if (reply) {
       // Only a reply that actually landed is logged as answered, and only then
       // is the command written off. The log is the one diagnostic surface here;
@@ -316,11 +320,6 @@ function span(buckets, key, today) {
 // so a correction cannot show up in one figure and not another.
 const spanOf = (totals, adjustments, key, today) =>
   combine(span(totals, key, today), span(adjustments, key, today))
-
-const dayOf = (totals, adjustments, day) =>
-  combine(sumTotals(totals, day), sumTotals(adjustments, day))
-
-const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 // Both commands take an optional day ahead of everything else, because a tally
 // that cannot go back is no use on the day you notice it was wrong.
@@ -457,6 +456,26 @@ async function restate(day, figures, epoch) {
   if (!amount) return { said: t('totalRecountSame'), note: '0' }
   const signed = `${amount > 0 ? '+' : ''}${amount}`
   return { said: t('totalRecountMoved', signed), note: signed }
+}
+
+// Free text, answered by a model on the user's own API key. Kept behind a
+// command rather than reading every message: in a group Telegram delivers only
+// commands to a bot at all, and a prefix is also what stops a mistyped /today or
+// a passing remark from spending someone's money.
+//
+// The model reads the tally and cannot write to it, so the worst this can do is
+// say something wrong — which the figures it is asked to quote alongside give
+// the reader a way to catch. /recount and /adjust remain the only writers.
+async function answerQuestion(s, arg) {
+  const question = String(arg).trim()
+  if (!question) return t('cmdAiUsage')
+  // Unset is the default, not a fault: everything else here works without a key
+  // and has to keep working without one.
+  if (!s.aiKey) return t('cmdAiNeedKey')
+  const today = dayKey(Date.now())
+  return ask({ apiKey: s.aiKey, question, today, tools: ledgerTools(today) }).catch((err) =>
+    t('tgFailOther', String(err?.message ?? err)),
+  )
 }
 
 // A short list, newest last, of chats that have talked to this bot. It exists so

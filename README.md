@@ -29,6 +29,24 @@ instead:
 /adjust 2026-08-20 -6500      an earlier day
 ```
 
+## Asking in plain words
+
+The five commands answer five fixed questions. For the rest there is `/ai`,
+which is off until you put an Anthropic API key in the settings:
+
+```
+/ai 최근 일주일간 일별 수익
+/ai is this month ahead of last month
+/ai which day last week sold nothing
+```
+
+It reads the same tally `/today` answers from and cannot write to it, so the
+worst it can do is say something wrong — and it is asked to quote the figures it
+read, so you can check the sentence against them. What leaves the browser is your
+question and the daily figures needed to answer it — amounts, order and refund
+counts, one row per day — sent to Anthropic on your key and your bill. Everything
+else keeps working with no key set.
+
 An order is filed under the date Play stamped it, which is what lets `/recount`
 speak about the same day the tally does. The recount counts only orders the bot
 already announced, so one still on its way is not counted twice, and a day it
@@ -48,6 +66,7 @@ that day supersedes them.
 | Local time / UTC | both on | |
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
+| Anthropic API key | — | Optional; turns on `/ai` |
 | Check every | 10 min | Only runs while Chrome is open |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |
