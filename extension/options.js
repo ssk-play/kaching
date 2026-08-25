@@ -168,6 +168,34 @@ $('test').addEventListener('click', async () => {
   say(res.ok ? t('msgTestSent') : res.error, res.ok ? 'ok' : 'err')
 })
 
+// Asks the model a real question over the real path, rather than pinging the
+// host: a key that authenticates against a model that does not exist, or a
+// service that authenticates but cannot call a tool, both look fine to a ping
+// and answer nothing in the chat.
+//
+// Reads what was saved, not what is typed. The permission for a non-default host
+// is granted on save, so a URL that has not been saved is one this could not
+// reach anyway — and saying "save first" is clearer than a fetch that fails.
+$('testAi').addEventListener('click', async () => {
+  const saved = await load()
+  if (!saved.aiKey) return say(t('msgNeedAiKey'), 'err')
+  if (saved.aiKey !== $('aiKey').value.trim()
+    || saved.aiBaseUrl !== $('aiBaseUrl').value.trim()
+    || saved.aiModel !== $('aiModel').value.trim()) {
+    return say(t('msgSaveAiFirst'), 'err')
+  }
+  // Checked here rather than left to the fetch, which fails with a network error
+  // that says nothing about which of the two things went wrong.
+  const origin = `${new URL(saved.aiBaseUrl).origin}/*`
+  if (!(await chrome.permissions.contains({ origins: [origin] }))) {
+    return say(t('msgNeedAiHost'), 'err')
+  }
+
+  say(t('msgAsking', saved.aiModel))
+  const res = await ask('testAi')
+  say(res.ok ? t('msgAiAnswered', res.result) : res.error, res.ok ? 'ok' : 'err')
+})
+
 $('checkNow').addEventListener('click', async () => {
   say(t('msgChecking'))
   const res = await ask('poll')

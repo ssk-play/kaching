@@ -412,5 +412,23 @@
   },
   "msgNeedAiHost": {
     "message": "그 주소에 접속하려면 Chrome 권한이 필요합니다. 다시 저장하고 허용하거나, API 키를 비워 주세요."
+  },
+  "btnTestAi": {
+    "message": "질문 테스트"
+  },
+  "msgNeedAiKey": {
+    "message": "먼저 API 키를 입력하세요 — 명령어가 아닌 말에 답하는 게 그 키입니다."
+  },
+  "msgSaveAiFirst": {
+    "message": "먼저 저장한 뒤 테스트하세요. 입력한 값이 아니라 저장된 값으로 물어봅니다."
+  },
+  "msgAsking": {
+    "message": "$1 에 물어보는 중…"
+  },
+  "msgAiAnswered": {
+    "message": "이렇게 답했습니다:\n\n$1"
+  },
+  "cmdAiProbe": {
+    "message": "오늘 지금까지 얼마 벌었어?"
   }
 }

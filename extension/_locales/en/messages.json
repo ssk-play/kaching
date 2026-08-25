@@ -412,5 +412,23 @@
   },
   "msgNeedAiHost": {
     "message": "Chrome needs permission to reach that host. Save again and allow it, or clear the API key."
+  },
+  "btnTestAi": {
+    "message": "Ask a test question"
+  },
+  "msgNeedAiKey": {
+    "message": "Enter an API key first — that is what answers anything that is not a command."
+  },
+  "msgSaveAiFirst": {
+    "message": "Save first, then test. This asks with what is stored, not with what is typed."
+  },
+  "msgAsking": {
+    "message": "Asking $1…"
+  },
+  "msgAiAnswered": {
+    "message": "It answered:\n\n$1"
+  },
+  "cmdAiProbe": {
+    "message": "How much has today brought in so far?"
   }
 }

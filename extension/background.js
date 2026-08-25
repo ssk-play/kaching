@@ -180,6 +180,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       const { knownChats } = await chrome.storage.local.get({ knownChats: [] })
       return [...knownChats.filter((c) => !live.some((n) => n.id === c.id)), ...live]
     },
+    // The same call a question from the chat makes, so what this proves is what
+    // the chat will do — key, host, model and tool calling in one round trip.
+    // Nothing is remembered from it: a probe is not a turn in anyone's
+    // conversation, and it would otherwise be the context of the next one.
+    testAi: async () => {
+      const s = await load()
+      if (!s.aiKey) throw new Error(t('msgNeedAiKey'))
+      const today = dayKey(Date.now())
+      return ask({
+        apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel,
+        question: t('cmdAiProbe'), today, tools: ledgerTools(today),
+      })
+    },
     test: async () => {
       const s = await load()
       if (!s.botToken || !s.chatId) throw new Error(t('msgNeedSetup'))
