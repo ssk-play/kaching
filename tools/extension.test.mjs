@@ -236,6 +236,25 @@ test('an unusable stored zone falls back rather than breaking every poll', () =>
   assert.equal(zoneOf({ timeZone: 'Asia/Kolkata' }), 'Asia/Kolkata')
 })
 
+test('every element the options page reaches for is in the options page', () => {
+  // options.js is not loaded here — it needs a DOM and a chrome.* that this
+  // harness has no reason to build. What it does have is one failure mode worth
+  // catching without either: $('sample') on an id nobody added to the HTML,
+  // which throws on load and leaves the whole settings page blank.
+  const js = fs.readFileSync(path.join(EXT, 'options.js'), 'utf8')
+  const html = fs.readFileSync(path.join(EXT, 'options.html'), 'utf8')
+  const present = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]))
+  const wanted = new Set([...js.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]))
+  assert.ok(wanted.size > 10, 'the id scan found nothing, so it is checking nothing')
+  for (const id of wanted) assert.ok(present.has(id), `options.html has no #${id}`)
+
+  // And every i18n key the page names is in the catalogue, for the same reason:
+  // a missing one renders as an empty label rather than as an error.
+  for (const m of html.matchAll(/data-i18n(?:-placeholder)?="([^"]+)"/g)) {
+    assert.ok(messages[m[1]], `no such message: ${m[1]}`)
+  }
+})
+
 test('nothing in the extension reads a day without naming the zone', () => {
   // The guard the argument cannot give on its own. dayKey throws on a missing
   // zone, but only when that line runs — and the line that files an order into a
@@ -287,17 +306,19 @@ test('an order reads as five lines, each answering one question', () => {
   // reading down a column, not across a sentence.
   // The zone is named rather than left to the browser, so this pins a shape
   // instead of pinning whatever machine ran it.
-  const s = { ...DEFAULTS, senderName: '', timeZone: 'Asia/Seoul' }
+  const s = { ...DEFAULTS, senderName: '', timeZone: 'Asia/Seoul', showUtcTime: false }
   assert.deepEqual(describe(order(), s).split('\n'), [
     'Purchase',
-    'com.example.app, premium_unlock(Premium)',
-    'KR, USD 4.99 → KRW 6,500 net',
-    // The counting zone first, UTC beside it: the day on the left is the day the
-    // running total under the order belongs to, and the one on the right is the
-    // day the Play Console will show for it. They differ here, which is the
-    // whole reason both are printed.
-    '2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC',
+    // The product id, not its display name: "premium_unlock" is what the
+    // Console, a receipt and a support ticket all call this thing.
+    'com.example.app, premium_unlock',
+    // What the buyer paid, then what lands in the account. No arrow and no
+    // labels — the order says which is which and the currencies say it again.
+    'KR, USD 4.99, KRW 6,500',
+    // The id above the time, because the id is what gets copied into the Console
+    // and the time is what gets glanced at.
     'GPA.1111-2222-3333-44444',
+    '2026-08-19 08:40 GMT+9',
   ])
 })
 
@@ -312,7 +333,7 @@ test('describe distinguishes refunds and subscriptions, without pictograms', () 
   // A line of chat that leads with an emoji reads as an advertisement, and this
   // one is a record.
   assert.ok(describe(order({ state: 'refunded' }), DEFAULTS).startsWith('Refund'))
-  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('Subscription'))
+  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('New subscription'))
   assert.equal(pictogram(describe(order(), DEFAULTS)), false)
   assert.equal(pictogram(describe(order({ state: 'refunded' }), DEFAULTS)), false)
 })
@@ -327,7 +348,7 @@ test('describe drops empty lines rather than printing blanks', () => {
   // rather than printing a bare comma.
   assert.deepEqual(sparse.split('\n'), [
     'Purchase',
-    'com.example.app, premium_unlock(Premium)',
+    'com.example.app, premium_unlock',
     order().id,
   ])
 })
@@ -461,26 +482,26 @@ test('feeRate is derived from the order, not assumed', () => {
   assert.equal(feeRate(order({ beforeFee: { currency: 'KRW', amount: 0 }, net: { currency: 'KRW', amount: 0 } })), null)
 })
 
-test('the payout line says what the second figure is', () => {
-  // It used to read "USD 4.99 -> KRW 6,500" with nothing naming the second
-  // number, which left the net indistinguishable from the charge.
-  const line = (o, s = DEFAULTS) => describe(order(o), s).split('\n').find((l) => l.includes('→'))
-  assert.match(line(), /USD 4\.99 → KRW 6,500 net$/)
-  // And it hedges only what is a guess. Play has settled this one, so calling it
-  // an estimate would be a caveat attached to money already paid out — which is
-  // how a real caveat, on the order below, stops being read.
-  assert.match(line({ payout: null, net: null }), /est\. net · 15% fee assumed$/)
+test('the price line is what was paid and what lands, in that order', () => {
+  const line = (o) => describe(order(o), DEFAULTS).split('\n')[2]
+  assert.equal(line(), 'KR, USD 4.99, KRW 6,500')
+  // An unsettled order is estimated from the price, and reads exactly the same.
+  // It used to carry "est. net, 15% fee assumed" — true, and read every day by
+  // someone who already knew it. What makes losing it affordable is that the
+  // estimate corrects itself: it is banked as a guess, and when Play settles,
+  // the difference moves into the day and the chat is told.
+  assert.equal(line({ payout: null, net: null }), 'KR, USD 4.99, USD 3.86')
+  // A price with nothing to net off it is one figure, not a dangling comma.
+  assert.equal(line({ payout: null, net: null, beforeFee: null, total: null }), 'KR')
 })
 
 test('the breakdown line appears only when asked for', () => {
   const off = describe(order(), { ...DEFAULTS, showBreakdown: false })
   assert.ok(!off.includes('fee 15%'), off)
   const on = describe(order(), { ...DEFAULTS, showBreakdown: true })
-  // Tax and rate only: repeating the net would print the same label twice, once
-  // per currency, with nothing saying which was the payout.
+  // Tax and rate only. The net is on the price line above and is not repeated.
   assert.ok(on.includes('tax USD 0.45 · fee 15%'), on)
-  // The net is named once, on the price line, and not repeated in the breakdown.
-  assert.equal(on.match(/ net\b/g).length, 1, on)
+  assert.equal(on.split('\n').length, off.split('\n').length + 1, on)
 })
 
 test('an order with no tax figures still renders without an empty line', () => {
@@ -501,8 +522,8 @@ test('a subscription renewal is not announced as a new subscription', () => {
   assert.equal(cycleOf(order({ id: 'GPA.1111-2222-3333-44444..0' })), null)
 
   const renewal = describe(order({ subscription: true, id: 'GPA.1111-2222-3333-44444..2' }), DEFAULTS)
-  assert.ok(renewal.startsWith('Subscription · charge #4'), renewal)
-  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('Subscription\n'))
+  assert.ok(renewal.startsWith('Subscription #4'), renewal)
+  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('New subscription\n'))
   // A refund stays a refund whatever charge it undoes.
   assert.ok(
     describe(order({ subscription: true, state: 'refunded', id: 'GPA.1..0' }), DEFAULTS)
@@ -534,26 +555,17 @@ test('an unsettled order still shows an estimated net', () => {
   // Nothing to work from stays nothing rather than becoming a zero.
   assert.equal(estimatedNet(order({ ...unsettled, beforeFee: null, total: null })), null)
 
-  const line = describe(order(unsettled), DEFAULTS).split('\n').find((l) => l.includes('→'))
-  assert.match(line, /USD 4\.99 → USD 3\.86 est\. net · 15% fee assumed$/)
+  assert.equal(describe(order(unsettled), DEFAULTS).split('\n')[2], 'KR, USD 4.99, USD 3.86')
 })
 
-test('an estimated net says on its own line that the rate was assumed', () => {
+test('the breakdown never restates an assumed fee as one read off the order', () => {
   const unsettled = { payout: null, net: null }
   assert.deepEqual(feeRate(order(unsettled)), { percent: 15, derived: false })
 
-  // The breakdown is off by default, so the disclaimer has to survive DEFAULTS:
-  // a guess that reads like a settled payout is the failure that matters.
-  const plain = describe(order(unsettled), DEFAULTS)
-  assert.ok(plain.includes('USD 3.86 est. net · 15% fee assumed'), plain)
   // A tax figure is not what makes an estimate an estimate.
   const noTax = describe(order({ ...unsettled, tax: null, beforeFee: null }), DEFAULTS)
-  assert.ok(noTax.includes('USD 4.24 est. net · 15% fee assumed'), noTax)
+  assert.ok(noTax.includes('USD 4.24'), noTax)
 
-  // A settled figure is Play's own and carries no such qualifier.
-  assert.ok(!describe(order(), DEFAULTS).includes('assumed'), describe(order(), DEFAULTS))
-
-  // The breakdown never restates an assumed rate as if it were read off the order.
   const on = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
   assert.ok(on.includes('tax USD 0.45'), on)
   assert.ok(!on.includes('fee 15%'), on)
@@ -573,8 +585,10 @@ test('a refund always nets out negative, whatever sign Play put on it', () => {
   const unsettled = { state: 'refunded', payout: null, net: null }
   assert.deepEqual(estimatedNet(order(unsettled)), { currency: 'USD', amount: -3.86 })
   const text = describe(order(unsettled), { ...DEFAULTS, showBreakdown: true })
-  assert.ok(text.includes('USD -3.86'), text)
-  assert.ok(text.includes('15%'), text)
+  assert.ok(text.includes('KR, USD 4.99, USD -3.86'), text)
+  // The fee is not restated: it was assumed rather than read off the order, and
+  // the breakdown only prints a rate the order actually carries.
+  assert.ok(!text.includes('15%'), text)
 })
 
 test('a reversal lands on exactly the figure it undoes', () => {
@@ -594,7 +608,7 @@ test('a reversal never prints a negative zero or a rate Google never charged', (
     beforeFee: null, tax: null, net: null, payout: { currency: 'USD', amount: 0 },
   }
   assert.ok(Object.is(estimatedNet(order(free)).amount, 0))
-  assert.ok(describe(order(free), DEFAULTS).includes('USD 0 net'), describe(order(free), DEFAULTS))
+  assert.ok(describe(order(free), DEFAULTS).includes('KR, USD 0, USD 0'), describe(order(free), DEFAULTS))
   const signed = order({ state: 'refunded', net: { currency: 'USD', amount: -3.86 } })
   assert.deepEqual(feeRate(signed), { percent: 15, derived: true })
 })
@@ -646,14 +660,15 @@ test('an estimate is rounded to the currency it is quoted in', () => {
   })
 })
 
-test('the product ID leads and the display name follows it', () => {
+test('the product ID is what prints, not the name it is shown under', () => {
   // The name is editable in the Console; the ID is what every API and every
   // line of the developer's own code keys on — so the ID is what the line can
-  // still be found by after someone renames the product.
+  // still be found by after someone renames the product. It also spared this
+  // line a parenthesis inside a line that already had a comma in it.
   const line = (o) => describe(order(o), DEFAULTS).split('\n')[1]
-  assert.equal(line(), 'com.example.app, premium_unlock(Premium)')
-  // Nothing to add is not the same as something to repeat.
-  assert.equal(line({ sku: 'Premium' }), 'com.example.app, Premium')
+  assert.equal(line(), 'com.example.app, premium_unlock')
+  // The name is the fallback for a product that arrives without an ID, not a
+  // second thing to print beside one.
   assert.equal(line({ sku: '' }), 'com.example.app, Premium')
   assert.equal(line({ product: '' }), 'com.example.app, premium_unlock')
   assert.equal(line({ sku: '', product: '' }), 'com.example.app')
@@ -707,8 +722,7 @@ test('an estimate is converted into the currency the developer is paid in', () =
   // Rounded to KRW's own unit, not carried at USD precision.
   assert.equal(Number.isInteger(estimatedNet(unsettled, fx).amount), true)
 
-  const line = describe(unsettled, DEFAULTS, fx).split('\n').find((l) => l.includes('→'))
-  assert.match(line, /USD 4\.99 → KRW 5,017 est\. net · 15% fee assumed$/)
+  assert.equal(describe(unsettled, DEFAULTS, fx).split('\n')[2], 'KR, USD 4.99, KRW 5,017')
 
   // No rate for the pair: the buyer-currency figure stands rather than a guess.
   assert.deepEqual(estimatedNet(unsettled, { currency: 'KRW', rates: {} }), {
@@ -745,7 +759,7 @@ test('a conversion states the rate it crossed at', () => {
   // the only reason the setting exists.
   const fx = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
   const text = describe(order({ payout: null, net: null }), { ...DEFAULTS, showBreakdown: true }, fx)
-  assert.ok(text.includes('KRW 5,017 est. net'), text)
+  assert.ok(text.includes('KR, USD 4.99, KRW 5,017'), text)
   assert.ok(text.includes('USD→KRW 1,300'), text)
   // Nothing crossed, nothing to disclose.
   const same = describe(order(), { ...DEFAULTS, showBreakdown: true }, fx)
@@ -976,7 +990,7 @@ test('a rate below 1 is disclosed as a number, not as zero', () => {
   })
   const text = describe(krw, { ...DEFAULTS, showBreakdown: true }, fx)
   assert.ok(text.includes('KRW→USD 0.00073'), text)
-  assert.ok(text.includes('USD 7.45 est. net'), text)
+  assert.ok(text.includes('KR, KRW 12,000, USD 7.45'), text)
 })
 
 test('a net Play reported but has not converted still lands in the payout currency', () => {

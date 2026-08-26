@@ -186,10 +186,10 @@
     "message": "Purchase"
   },
   "notifNewSub": {
-    "message": "Subscription"
+    "message": "New subscription"
   },
   "notifSubRenewal": {
-    "message": "Subscription · charge #$1"
+    "message": "Subscription #$1"
   },
   "notifRefund": {
     "message": "Refund"
@@ -272,9 +272,6 @@
   "logFailCount": {
     "message": "failure $1"
   },
-  "labelNet": {
-    "message": "net"
-  },
   "totalToday": {
     "message": "Today $2 orders · $1"
   },
@@ -292,6 +289,18 @@
   },
   "hintDailyTotal": {
     "message": "Adds a footer to every order message with what the day has announced so far. The bot answers /today and /month either way; this only controls the footer."
+  },
+  "lblSample": {
+    "message": "Preview"
+  },
+  "sampleBuy": {
+    "message": "Purchase"
+  },
+  "sampleSub": {
+    "message": "New subscription"
+  },
+  "sampleRenewal": {
+    "message": "Subscription renewal"
   },
   "lblAiKey": {
     "message": "API key"
@@ -433,9 +442,6 @@
   },
   "labelFee": {
     "message": "fee $1%"
-  },
-  "labelNetAssumed": {
-    "message": "est. net · $1% fee assumed"
   },
   "lblBreakdown": {
     "message": "Show tax and fee breakdown"
