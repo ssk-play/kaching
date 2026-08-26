@@ -660,14 +660,27 @@ test('a conversion states the rate it crossed at', () => {
   assert.ok(!same.includes('→KRW 1,300'), same)
 })
 
-test('a day is the developer\'s day, not UTC', () => {
-  // A sale at 08:40 in Seoul belongs to that morning. A UTC key would file it
-  // against the day before and make the footer disagree with the timestamp
-  // printed directly above it.
+test('a day is a UTC day, whatever zone the browser is in', () => {
+  // The tally is a copy of Play's books, and Play files an order under its UTC
+  // date. Counted under the machine's own day instead, a sale at 08:40 in Seoul
+  // lands in a bucket that /recount — which asks Play for a window in absolute
+  // time — can only ever rebuild part of.
   const ms = Date.UTC(2026, 7, 18, 23, 40)
+  assert.equal(T.dayKey(ms), '2026-08-18')
   assert.equal(T.dayKey(ms, 'Asia/Seoul'), '2026-08-19')
-  assert.equal(T.dayKey(ms, 'UTC'), '2026-08-18')
+  // The default is what matters: nothing in the extension passes a zone, so a
+  // default read off the host would put a Seoul install and a London one into
+  // different buckets for the same order.
+  assert.equal(T.dayKey(ms), T.dayKey(ms, 'UTC'))
   assert.equal(T.monthKey('2026-08-19'), '2026-08')
+
+  // And the window a dated /recount asks Play for is exactly one bucket, so a
+  // day is rebuilt from the whole of itself.
+  const from = Date.parse('2026-08-18T00:00:00Z')
+  const to = from + 86_400_000
+  assert.equal(T.dayKey(from), '2026-08-18')
+  assert.equal(T.dayKey(to - 1), '2026-08-18')
+  assert.equal(T.dayKey(to), '2026-08-19')
 })
 
 test('totals sum a day and a month from the same buckets', () => {

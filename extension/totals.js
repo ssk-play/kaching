@@ -17,10 +17,21 @@
 // have".
 export const MAX_DAYS = 1100
 
-// The developer's own day, not UTC. A sale at 08:00 in Seoul belongs to that
-// morning; a UTC key would file it against the day before and make the daily
-// figure disagree with the timestamp printed right above it.
-export function dayKey(ms, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone) {
+// UTC, like everything else here. It is the day Play files an order under, the
+// day the order line prints, and — because /recount asks Play for a window in
+// absolute time — the only day a rebuild can put an order back into without
+// moving it.
+//
+// This was the machine's own zone once, on the reasoning that a sale at 08:00 in
+// Seoul belongs to that morning. It does, to the person reading it; it does not
+// to Play, and the tally is a copy of Play's books. A window fetched by UTC and
+// filed by KST is a day that gets rewritten from three quarters of itself,
+// which is what a dated /recount was quietly doing.
+//
+// The zone stays an argument because the tests need to name one, and because
+// what the clock in an order line says is still the reader's choice — only what
+// day the money is counted under is not.
+export function dayKey(ms, timeZone = 'UTC') {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -36,9 +47,7 @@ export const monthKey = (key) => key.slice(0, 7)
 // is how the two start disagreeing about what a day is.
 export const DAY = /^\d{4}-\d{2}-\d{2}$/
 
-// A key moved by whole days. Parsed as UTC for the same reason weekStart is: the
-// key is already the developer's own calendar date, and re-reading it in local
-// time would shift it for anyone west of Greenwich.
+// A key moved by whole days. Parsed as UTC for the same reason weekStart is.
 export const shift = (key, days) =>
   new Date(Date.parse(`${key}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10)
 
@@ -127,9 +136,9 @@ const wholeMonth = (key) => {
   return [`${key}-01`, isDay(nextFirst) ? shift(nextFirst, -1) : null]
 }
 
-// The Sunday on or before the given day. Parsed as UTC deliberately: the key is
-// already the developer's own calendar date, and re-reading it in local time
-// would shift it a day for anyone west of Greenwich.
+// The Sunday on or before the given day. Parsed as UTC, like the key itself and
+// like every other date in this file — read in local time it would shift a day
+// for anyone west of Greenwich.
 export function weekStart(key) {
   const day = new Date(`${key}T00:00:00Z`)
   day.setUTCDate(day.getUTCDate() - day.getUTCDay())

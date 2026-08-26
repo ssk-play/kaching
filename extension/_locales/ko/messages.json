@@ -78,7 +78,7 @@
     "message": "UTC 로 표시"
   },
   "hintTimes": {
-    "message": "Play 는 주문 시각을 UTC 로 기록합니다. 둘 다 켜면 나란히 보여줍니다."
+    "message": "Play 는 주문 시각을 UTC 로 기록하고, 하루 누계도 UTC 자정부터 UTC 자정까지입니다. 둘 다 켜면 내 시계를 나란히 볼 수 있습니다."
   },
   "lblInterval": {
     "message": "확인 주기 (분)"
