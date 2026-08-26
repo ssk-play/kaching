@@ -264,7 +264,7 @@
     "message": "failure $1"
   },
   "labelNet": {
-    "message": "est. net"
+    "message": "net"
   },
   "totalToday": {
     "message": "Today $2 orders · $1"
@@ -417,7 +417,7 @@
     "message": "Show tax and fee breakdown"
   },
   "hintBreakdown": {
-    "message": "Adds a line with the tax withheld and, once Play reports enough to work it out, the exact rate of Google's cut — so the estimated net can be checked rather than trusted."
+    "message": "Adds a line with the tax withheld and, once Play reports enough to work it out, the exact rate of Google's cut — so the net can be checked rather than trusted."
   },
   "cmdAiGaveUp": {
     "message": "That took more looking up than one question gets. Try asking about a narrower stretch of days."

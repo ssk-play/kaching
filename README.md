@@ -37,7 +37,7 @@ under it:
 ```
 구독 4회차
 com.example.app, premium_unlock(프리미엄 잠금해제)
-IN, INR 399 → KRW 4,600 예상 순수익
+IN, INR 399 → KRW 4,600 순수익
 2026-08-23 02:01 UTC
 GPA.1111-2222-3333-44444..2
 오늘 11건 · KRW 56,671 · 환불 2건 KRW -9,100

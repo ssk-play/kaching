@@ -77,7 +77,7 @@ test('the pictogram guard can see the characters it was written about', () => {
   // And not on the punctuation these messages legitimately carry, which is why
   // the span stops short of it and picks up its two exceptions by name.
   for (const plain of [
-    'KR, USD 4.99 → KRW 6,500 est. net',
+    'KR, USD 4.99 → KRW 6,500 net',
     'Today 2 orders · KRW 8,000',
     '오늘 11건 · KRW 56,671',
     'a — b … c "d" ₩1,000 ¥100',
@@ -202,7 +202,7 @@ test('an order reads as five lines, each answering one question', () => {
   assert.deepEqual(describe(order(), { ...DEFAULTS, senderName: '' }).split('\n'), [
     'Purchase',
     'com.example.app, premium_unlock(Premium)',
-    'KR, USD 4.99 → KRW 6,500 est. net',
+    'KR, USD 4.99 → KRW 6,500 net',
     '2026-08-18 23:40 UTC',
     'GPA.1111-2222-3333-44444',
   ])
@@ -371,8 +371,12 @@ test('feeRate is derived from the order, not assumed', () => {
 test('the payout line says what the second figure is', () => {
   // It used to read "USD 4.99 -> KRW 6,500" with nothing naming the second
   // number, which left the net indistinguishable from the charge.
-  const line = describe(order(), DEFAULTS).split('\n').find((l) => l.includes('→'))
-  assert.match(line, /USD 4\.99 → KRW 6,500 est\. net$/)
+  const line = (o, s = DEFAULTS) => describe(order(o), s).split('\n').find((l) => l.includes('→'))
+  assert.match(line(), /USD 4\.99 → KRW 6,500 net$/)
+  // And it hedges only what is a guess. Play has settled this one, so calling it
+  // an estimate would be a caveat attached to money already paid out — which is
+  // how a real caveat, on the order below, stops being read.
+  assert.match(line({ payout: null, net: null }), /est\. net · 15% fee assumed$/)
 })
 
 test('the breakdown line appears only when asked for', () => {
@@ -382,7 +386,8 @@ test('the breakdown line appears only when asked for', () => {
   // Tax and rate only: repeating the net would print the same label twice, once
   // per currency, with nothing saying which was the payout.
   assert.ok(on.includes('tax USD 0.45 · fee 15%'), on)
-  assert.equal(on.match(/est\. net/g).length, 1, on)
+  // The net is named once, on the price line, and not repeated in the breakdown.
+  assert.equal(on.match(/ net\b/g).length, 1, on)
 })
 
 test('an order with no tax figures still renders without an empty line', () => {
@@ -496,7 +501,7 @@ test('a reversal never prints a negative zero or a rate Google never charged', (
     beforeFee: null, tax: null, net: null, payout: { currency: 'USD', amount: 0 },
   }
   assert.ok(Object.is(estimatedNet(order(free)).amount, 0))
-  assert.ok(describe(order(free), DEFAULTS).includes('USD 0 est. net'), describe(order(free), DEFAULTS))
+  assert.ok(describe(order(free), DEFAULTS).includes('USD 0 net'), describe(order(free), DEFAULTS))
   const signed = order({ state: 'refunded', net: { currency: 'USD', amount: -3.86 } })
   assert.deepEqual(feeRate(signed), { percent: 15, derived: true })
 })
