@@ -107,8 +107,10 @@ function round(amount, currency) {
   return amount < 0 ? -out : out
 }
 
-// Reported figures first; the estimate only fills the gap. Both are labelled as
-// estimates either way — even a settled figure moves with FX and adjustments.
+// Reported figures first; the estimate only fills the gap, and only the gap is
+// labelled as one. A settled payout used to be called an estimate too, on the
+// reasoning that any figure can still move — which is true of every number
+// anyone has ever been shown, and hedged the ones Play had already paid out.
 //
 // `fx` carries the developer's own currency and the rates read off settled
 // orders. An estimate arrives in whatever the buyer paid, which is not the
@@ -193,6 +195,11 @@ export function describe(order, settings, fx = {}) {
   // off by default, so leaving the disclaimer there would hide it from almost
   // everyone — and a guess that looks like a settled payout is the one failure
   // this line cannot afford.
+  //
+  // The other half of that bargain is that a figure Play has settled is not
+  // hedged. `derived: false` is only ever returned for an order with no reported
+  // net, so the assumed label and the plain one divide exactly on whether Play
+  // has paid out — which is the only question the label can usefully answer.
   const netLabel = fee && !fee.derived ? t('labelNetAssumed', fee.percent) : t('labelNet')
   const price = [money(order.total), net ? `→ ${money(net)} ${netLabel}` : '']
     .filter(Boolean)
