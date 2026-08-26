@@ -699,6 +699,17 @@ async function restate(rebuilt, epoch, rebuild) {
   await inflight?.catch(() => {})
   if (epoch !== resetEpoch) return { said: t('totalRecountUntouched'), note: '' }
 
+  const work = rewrite(found, rebuild)
+  restating = work.finally(() => {
+    restating = null
+  })
+  return work
+}
+
+// Kept apart from the waiting above so the claim on `restating` is made in the
+// same tick the work starts in: an await between the two would be a gap a poll
+// could start in, which is the whole thing being guarded against.
+async function rewrite(found, rebuild) {
   const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
   const ledger = await rebank(rebuild)
   let nextTotals = totals
@@ -871,10 +882,25 @@ async function rememberChats(seen) {
 
 let inflight = null
 
+// A rebuild rewriting the books and a poll adding to them both work from a copy
+// read out of storage, so whichever writes second wins outright. That is a
+// millisecond of overlap for a poll landing one order — and a /recount of three
+// years takes two minutes to fetch, which is long enough for a scheduled poll to
+// start inside it. If the poll's copy of `seen` won, three hundred adopted
+// orders would look unannounced again and the next check would send every one of
+// them to the chat.
+//
+// So the two take turns. The rebuild waits for a poll in flight; a poll waits
+// for a rebuild that has started writing. Both claims are made with no await in
+// between, which is what makes taking turns work rather than just narrowing the
+// window.
+let restating = null
+
 export function poll() {
   // A manual click during a scheduled run should show that run's result rather
   // than be turned away — at short intervals the two overlap almost every time.
-  inflight ??= runPoll()
+  inflight ??= (restating ? restating.catch(() => {}) : Promise.resolve())
+    .then(() => runPoll())
     .then(async (result) => {
       await chrome.storage.local.set({ lastRun: { at: stamp(), result } })
       await report(result)

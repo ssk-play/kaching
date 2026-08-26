@@ -291,15 +291,26 @@ export function amountFor(ledger, id, currency) {
 export function resettle(buckets, key, code, amount) {
   const prev = buckets[key]
   if (!prev || !amount) return buckets
+  // A bucket that has a split but no row under this code yet gets one: moving
+  // the day's amount and leaving the split behind would have the two disagree,
+  // which is the one thing the split is not allowed to do.
+  //
+  // A bucket from before the split existed gets nothing. Its orders were never
+  // filed under any currency, so one row here could only ever hold this
+  // correction and not the money it is correcting — and the day would stop
+  // being reported as unsplit while still being short by everything else in it.
+  // A gap that says it is a gap beats one that has been papered over.
   const at = prev.currencies?.[code]
+  if (!at && !hasBreakdown(prev)) {
+    return { ...buckets, [key]: { ...prev, amount: prev.amount + amount } }
+  }
+  const row = at ?? perCurrency()
   return {
     ...buckets,
     [key]: {
       ...prev,
       amount: prev.amount + amount,
-      ...(at
-        ? { currencies: { ...prev.currencies, [code]: { ...at, amount: at.amount + amount } } }
-        : {}),
+      currencies: { ...prev.currencies, [code]: { ...row, amount: row.amount + amount } },
     },
   }
 }

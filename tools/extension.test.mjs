@@ -1541,6 +1541,27 @@ test('a figure Play settles later moves the day without counting the order again
   assert.equal(T.isEstimate(led, 'a'), false)
 })
 
+test('a settlement keeps the split adding up, or leaves it visibly absent', () => {
+  // A day that has a split but no row for this currency gets one, or moving the
+  // amount and not the split would have the two disagree.
+  let split = T.record({}, '2026-08-23', { net: { currency: 'KRW', amount: 900 }, currency: 'KRW', from: 'USD' })
+  split = T.resettle(split, '2026-08-23', 'JPY', 2160)
+  const both = T.sum(split, '2026-08-23')
+  assert.equal(both.amount, 3060)
+  assert.equal(Object.values(both.currencies).reduce((n, c) => n + c.amount, 0), both.amount)
+  // No order invented for it: the count belongs to the day, which has it.
+  assert.equal(both.currencies.JPY.orders, 0)
+
+  // A bucket from before the split existed gets no row at all. One here could
+  // only hold this correction and not the money it corrects, and the day would
+  // stop being reported as unsplit while still being short by everything else.
+  // A gap that says it is a gap beats one that has been papered over.
+  const before = { '2026-08-23': { currency: 'KRW', amount: 340, orders: 1, refunds: 0, refunded: 0, uncounted: 0 } }
+  const put = T.resettle(before, '2026-08-23', 'KRW', 2160)
+  assert.equal(T.sum(put, '2026-08-23').amount, 2500)
+  assert.equal(T.hasBreakdown(put['2026-08-23']), false)
+})
+
 test('a day the bucket window has dropped is not resurrected by a settlement', () => {
   // Putting it back would stand a single order up as if it were the whole day's
   // takings, on a day the tally has already stopped answering for.
