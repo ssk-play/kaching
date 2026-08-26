@@ -42,6 +42,31 @@ for (const el of document.querySelectorAll('[data-i18n-placeholder]')) {
 
 // ------------------------------------------------------------------- form <-> storage
 
+// The zone that decides which day an order is counted under. A list rather than
+// a text field: the name has to be one Intl accepts, and a typo here would be a
+// tally filed into days nothing else agrees about.
+//
+// The browser's own zone leads, named, so the default is a choice the reader can
+// see rather than a blank. UTC is next because it is what the Play Console
+// reports and so what someone reconciling against it would want.
+function fillZones() {
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const all = Intl.supportedValuesOf?.('timeZone') ?? [here, 'UTC']
+  const rest = all.filter((z) => z !== here && z !== 'UTC')
+  const option = (value, text) => {
+    const el = document.createElement('option')
+    el.value = value
+    el.textContent = text
+    return el
+  }
+  $('timeZone').append(
+    option('', t('lblZoneAuto', here)),
+    option('UTC', 'UTC'),
+    ...rest.map((z) => option(z, z)),
+  )
+}
+fillZones()
+
 const CHECKBOXES = [
   'notifyCharged', 'notifyRefunded', 'showLocalTime', 'showUtcTime', 'showBreakdown',
   'showDailyTotal', 'verbose',
@@ -51,9 +76,19 @@ const TEXTS = [
   'botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey', 'aiBaseUrl', 'aiModel',
   'aiProbe',
 ]
+// Not trimmed or typed into: a select can only hold what fillZones put in it.
+const PICKS = ['timeZone']
 
 function fill(settings) {
   for (const id of TEXTS) $(id).value = settings[id]
+  // A stored zone a later browser has dropped would select nothing and read back
+  // as "", quietly moving every future day. Kept visible instead.
+  for (const id of PICKS) {
+    if (settings[id] && !$(id).querySelector(`option[value="${CSS.escape(settings[id])}"]`)) {
+      $(id).append(new Option(settings[id], settings[id]))
+    }
+    $(id).value = settings[id]
+  }
   // Older installs stored developerId with no consoleUrl. Showing the URL it
   // implies keeps Save from wiping an id the form cannot otherwise see.
   $('consoleUrl').value = settings.consoleUrl || consoleUrlFor(settings.developerId)
@@ -65,6 +100,7 @@ function fill(settings) {
 function read() {
   const out = {}
   for (const id of TEXTS) out[id] = $(id).value.trim()
+  for (const id of PICKS) out[id] = $(id).value
   for (const [id, range] of Object.entries(NUMBERS)) {
     out[id] = clampNumber($(id).value, range, DEFAULTS[id])
   }
@@ -107,7 +143,9 @@ const renderPreview = () => {
   const footer = s.showDailyTotal ? totalLine('totalToday', SAMPLE_DAY) : null
   $('preview').textContent = [describe(SAMPLE, s), footer].filter(Boolean).join('\n')
 }
-for (const id of ['senderName', 'showLocalTime', 'showUtcTime', 'showBreakdown', 'showDailyTotal']) {
+for (const id of [
+  'senderName', 'timeZone', 'showLocalTime', 'showUtcTime', 'showBreakdown', 'showDailyTotal',
+]) {
   $(id).addEventListener('input', renderPreview)
 }
 renderPreview()

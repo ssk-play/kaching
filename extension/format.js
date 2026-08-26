@@ -2,6 +2,7 @@
 
 import { t } from './i18n.js'
 import { convert, rateFor } from './fx.js'
+import { zoneOf } from './settings.js'
 
 // Assembled from parts rather than a locale string: every locale punctuates
 // dates differently, and two zones have to line up under each other.
@@ -22,13 +23,17 @@ function zoneLabel(ms, timeZone) {
   return parts.find((x) => x.type === 'timeZoneName')?.value ?? ''
 }
 
-export function times(ms, { showLocalTime, showUtcTime }) {
+// The configured zone first — the one the tally counts in, so the day printed
+// here is the day the total under it belongs to — then UTC, which is what the
+// Play Console reports and so the only way to reconcile the two by eye.
+//
+// A zone that resolves to UTC prints one line rather than the same instant
+// twice under two names.
+export function times(ms, settings) {
+  const zone = zoneOf(settings)
   const out = []
-  if (showLocalTime) {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    out.push(`${clock(ms, zone)} ${zoneLabel(ms, zone)}`.trim())
-  }
-  if (showUtcTime) out.push(`${clock(ms, 'UTC')} UTC`)
+  if (settings.showLocalTime) out.push(`${clock(ms, zone)} ${zoneLabel(ms, zone)}`.trim())
+  if (settings.showUtcTime && zoneLabel(ms, zone) !== 'UTC') out.push(`${clock(ms, 'UTC')} UTC`)
   // Both off is a deliberate choice, so the line is dropped rather than
   // second-guessed — the caller filters empty lines out.
   return out.join(' / ')

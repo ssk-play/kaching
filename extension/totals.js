@@ -17,21 +17,21 @@
 // have".
 export const MAX_DAYS = 1100
 
-// UTC, like everything else here. It is the day Play files an order under, the
-// day the order line prints, and — because /recount asks Play for a window in
-// absolute time — the only day a rebuild can put an order back into without
-// moving it.
+// The day an instant falls on, in the zone the reader configured. One zone
+// decides this, the fetch window below, and the clock in an order line — see
+// zoneOf in settings.js for why that is one lookup rather than a default
+// repeated per call site.
 //
-// This was the machine's own zone once, on the reasoning that a sale at 08:00 in
-// Seoul belongs to that morning. It does, to the person reading it; it does not
-// to Play, and the tally is a copy of Play's books. A window fetched by UTC and
-// filed by KST is a day that gets rewritten from three quarters of itself,
-// which is what a dated /recount was quietly doing.
-//
-// The zone stays an argument because the tests need to name one, and because
-// what the clock in an order line says is still the reader's choice — only what
-// day the money is counted under is not.
-export function dayKey(ms, timeZone = 'UTC') {
+// The zone is required, not defaulted. A call site that forgets it should fail
+// where it stands: a default here would be a second calendar, and a second
+// calendar is what filed orders into days that /recount then rebuilt from part
+// of themselves.
+export function dayKey(ms, timeZone) {
+  // Intl reads an undefined zone as the host's, so a call site that forgot the
+  // argument would not fail — it would quietly file into the machine's own
+  // calendar, which is the exact second calendar this argument exists to
+  // prevent. Refused here instead, where it is a coding error and not a tally.
+  if (!timeZone) throw new Error('dayKey needs a time zone')
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -39,6 +39,42 @@ export function dayKey(ms, timeZone = 'UTC') {
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
   return `${p.year}-${p.month}-${p.day}`
 }
+
+// How far the zone is from UTC at a given instant, in ms. Read by formatting the
+// instant in that zone and reading the result back as though it were UTC: the
+// difference between the two is the offset that was in force. h23 because an
+// hour that formats as "24" would parse as the next day.
+function offsetAt(ms, timeZone) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    })
+      .formatToParts(new Date(ms))
+      .map((x) => [x.type, x.value]),
+  )
+  return Date.parse(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}Z`) - ms
+}
+
+// The instant a day begins, as epoch ms. This is what makes a bucket and a fetch
+// window the same thing: Play is asked for absolute time, and a day is a range
+// of absolute time only once somebody works out where its edges are.
+//
+// Twice, because the offset has to be read at the instant it applies and the
+// first read is at the wrong one. On a spring-forward day in a zone with DST the
+// first guess lands in the hour that does not exist, and the second pass moves
+// it to the instant the clock actually starts the day at.
+export function startOf(key, timeZone) {
+  if (!timeZone) throw new Error('startOf needs a time zone')
+  const wall = Date.parse(`${key}T00:00:00Z`)
+  const guess = wall - offsetAt(wall, timeZone)
+  return wall - offsetAt(guess, timeZone)
+}
+
+// The instant after a day's last, so a range is half-open and the two ends of
+// consecutive days meet exactly rather than overlapping by a millisecond.
+export const endOf = (key, timeZone) => startOf(shift(key, 1), timeZone)
 
 export const monthKey = (key) => key.slice(0, 7)
 

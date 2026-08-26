@@ -29,8 +29,9 @@ globalThis.chrome = {
 
 // Absolute paths must be file: URLs for dynamic import.
 const load = (f) => import(pathToFileURL(path.join(EXT, f)).href)
-const { DEFAULTS, developerIdFrom, packageList, isConfigured, consoleUrlFor, clampNumber } =
-  await load('settings.js')
+const {
+  DEFAULTS, developerIdFrom, packageList, isConfigured, consoleUrlFor, clampNumber, zoneOf, isZone,
+} = await load('settings.js')
 const { matches, plan } = await load('filters.js')
 const { times, describe, feeRate, cycleOf, estimatedNet, isSettled } = await load('format.js')
 const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('health.js')
@@ -186,13 +187,97 @@ test('minPayout is compared in the currency it was written in', () => {
   assert.equal(matches(order(), { ...DEFAULTS, minPayout: 7000 }, krw), false)
 })
 
-test('time toggles select zones independently', () => {
+// The text between a call's parentheses, and how many arguments it splits into.
+// A regex cannot do this: dayKey(Date.now(), zone) closes an inner paren first,
+// and a nested comma belongs to the inner call rather than the outer one.
+function argsAt(text, start) {
+  let depth = 0
+  for (let i = start; i < text.length; i += 1) {
+    const c = text[i]
+    if (c === '(') depth += 1
+    else if (c === ')') {
+      if (depth === 0) return text.slice(start, i)
+      depth -= 1
+    }
+  }
+  return text.slice(start)
+}
+
+function topLevelCommas(args) {
+  let depth = 0
+  let found = 0
+  for (const c of args) {
+    if ('([{'.includes(c)) depth += 1
+    else if (')]}'.includes(c)) depth -= 1
+    else if (c === ',' && depth === 0) found += 1
+  }
+  return found
+}
+
+test('an unusable stored zone falls back rather than breaking every poll', () => {
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone
+  assert.equal(zoneOf({ timeZone: 'Asia/Seoul' }), 'Asia/Seoul')
+  // Unset means the browser's, so a fresh install counts in the day of whoever
+  // is looking at it.
+  assert.equal(zoneOf({ timeZone: '' }), here)
+  assert.equal(zoneOf({}), here)
+  assert.equal(zoneOf(null), here)
+  // A name Intl will not take — a zone a later browser dropped, or a value from
+  // an older build. Wrong by hours at worst; the alternative is a worker that
+  // throws on every order it tries to file.
+  assert.equal(zoneOf({ timeZone: 'Mars/Olympus' }), here)
+  assert.equal(isZone('Mars/Olympus'), false)
+  assert.equal(isZone('Asia/Seoul'), true)
+  // Empty is not invalid, it is unset.
+  assert.equal(isZone(''), true)
+  // The memo is per name, so two zones in a row do not answer with the first.
+  assert.equal(zoneOf({ timeZone: 'UTC' }), 'UTC')
+  assert.equal(zoneOf({ timeZone: 'Mars/Olympus' }), here)
+  assert.equal(zoneOf({ timeZone: 'Asia/Kolkata' }), 'Asia/Kolkata')
+})
+
+test('nothing in the extension reads a day without naming the zone', () => {
+  // The guard the argument cannot give on its own. dayKey throws on a missing
+  // zone, but only when that line runs — and the line that files an order into a
+  // day runs on a poll, in a service worker, where a throw is a log entry nobody
+  // reads. Caught here instead, where it is a failing build.
+  //
+  // Read off the source rather than asserted in prose: this is a rule about
+  // every call site, and a rule about every call site has to be checked against
+  // all of them.
+  for (const file of fs.readdirSync(EXT).filter((f) => f.endsWith('.js'))) {
+    const text = fs.readFileSync(path.join(EXT, file), 'utf8')
+    for (const call of text.matchAll(/\b(dayKey|startOf|endOf)\(/g)) {
+      const args = argsAt(text, call.index + call[0].length)
+      // The definitions themselves, whose parameter list is the thing being
+      // required rather than a call that has to satisfy it.
+      if (/^(ms|key), timeZone$/.test(args)) continue
+      assert.ok(
+        topLevelCommas(args) >= 1,
+        `${file}: ${call[1]}(${args}) — a day read with no zone is the second calendar`,
+      )
+    }
+  }
+})
+
+test('the clock reads in the configured zone, with UTC beside it', () => {
   const at = Date.UTC(2026, 7, 18, 23, 40)
-  assert.equal(times(at, { showLocalTime: false, showUtcTime: true }), '2026-08-18 23:40 UTC')
-  assert.match(times(at, { showLocalTime: true, showUtcTime: false }), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
-  assert.match(times(at, { showLocalTime: true, showUtcTime: true }), / \/ 2026-08-18 23:40 UTC$/)
+  const seoul = { timeZone: 'Asia/Seoul', showLocalTime: true, showUtcTime: true }
+  // The zone that decides the day leads, because the day printed here is the day
+  // the total under it belongs to. UTC follows, for reconciling with the Console.
+  assert.equal(times(at, seoul), '2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC')
+  assert.equal(times(at, { ...seoul, showLocalTime: false }), '2026-08-18 23:40 UTC')
+  assert.equal(times(at, { ...seoul, showUtcTime: false }), '2026-08-19 08:40 GMT+9')
   // Both off is a choice, not an error: the line disappears.
-  assert.equal(times(at, { showLocalTime: false, showUtcTime: false }), '')
+  assert.equal(times(at, { ...seoul, showLocalTime: false, showUtcTime: false }), '')
+
+  // An unset zone is the browser's, so a fresh install shows the reader's own
+  // clock without being told what it is.
+  assert.match(times(at, { showLocalTime: true, showUtcTime: false }), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/)
+
+  // A zone that IS UTC prints one line, not the same instant twice under two
+  // names — which is what a developer who picks UTC has asked for.
+  assert.equal(times(at, { timeZone: 'UTC', showLocalTime: true, showUtcTime: true }), '2026-08-18 23:40 UTC')
 })
 
 test('an order reads as five lines, each answering one question', () => {
@@ -200,11 +285,18 @@ test('an order reads as five lines, each answering one question', () => {
   // when, and which order. Pinned whole because the value of the shape is that
   // it is the same shape every time — a reader scanning a month of these is
   // reading down a column, not across a sentence.
-  assert.deepEqual(describe(order(), { ...DEFAULTS, senderName: '' }).split('\n'), [
+  // The zone is named rather than left to the browser, so this pins a shape
+  // instead of pinning whatever machine ran it.
+  const s = { ...DEFAULTS, senderName: '', timeZone: 'Asia/Seoul' }
+  assert.deepEqual(describe(order(), s).split('\n'), [
     'Purchase',
     'com.example.app, premium_unlock(Premium)',
     'KR, USD 4.99 → KRW 6,500 net',
-    '2026-08-18 23:40 UTC',
+    // The counting zone first, UTC beside it: the day on the left is the day the
+    // running total under the order belongs to, and the one on the right is the
+    // day the Play Console will show for it. They differ here, which is the
+    // whole reason both are printed.
+    '2026-08-19 08:40 GMT+9 / 2026-08-18 23:40 UTC',
     'GPA.1111-2222-3333-44444',
   ])
 })
@@ -660,27 +752,44 @@ test('a conversion states the rate it crossed at', () => {
   assert.ok(!same.includes('→KRW 1,300'), same)
 })
 
-test('a day is a UTC day, whatever zone the browser is in', () => {
-  // The tally is a copy of Play's books, and Play files an order under its UTC
-  // date. Counted under the machine's own day instead, a sale at 08:40 in Seoul
-  // lands in a bucket that /recount — which asks Play for a window in absolute
-  // time — can only ever rebuild part of.
+test('one zone decides the day, and the fetch window for that day matches it', () => {
+  // The tally counts in the zone the reader configured. What matters is not
+  // which zone that is but that only one exists: a window fetched by one
+  // calendar and filed by another is a day rebuilt from part of itself, which is
+  // what a dated /recount was doing.
   const ms = Date.UTC(2026, 7, 18, 23, 40)
-  assert.equal(T.dayKey(ms), '2026-08-18')
   assert.equal(T.dayKey(ms, 'Asia/Seoul'), '2026-08-19')
-  // The default is what matters: nothing in the extension passes a zone, so a
-  // default read off the host would put a Seoul install and a London one into
-  // different buckets for the same order.
-  assert.equal(T.dayKey(ms), T.dayKey(ms, 'UTC'))
+  assert.equal(T.dayKey(ms, 'UTC'), '2026-08-18')
   assert.equal(T.monthKey('2026-08-19'), '2026-08')
 
-  // And the window a dated /recount asks Play for is exactly one bucket, so a
-  // day is rebuilt from the whole of itself.
-  const from = Date.parse('2026-08-18T00:00:00Z')
-  const to = from + 86_400_000
-  assert.equal(T.dayKey(from), '2026-08-18')
-  assert.equal(T.dayKey(to - 1), '2026-08-18')
-  assert.equal(T.dayKey(to), '2026-08-19')
+  // The zone is required, and refused loudly when missing. Intl reads an
+  // undefined zone as the host's, so a forgotten argument would not fail — it
+  // would file into the machine's own calendar, which is the second calendar
+  // the argument exists to prevent.
+  assert.throws(() => T.dayKey(ms, undefined), /time zone/)
+  assert.throws(() => T.startOf('2026-08-19', ''), /time zone/)
+
+  // The window /recount asks Play for is exactly one bucket, in every zone.
+  for (const zone of ['Asia/Seoul', 'UTC', 'America/New_York', 'Asia/Kolkata', 'Pacific/Chatham']) {
+    const day = '2026-08-19'
+    const from = T.startOf(day, zone)
+    const to = T.endOf(day, zone)
+    assert.equal(T.dayKey(from, zone), day, zone)
+    assert.equal(T.dayKey(to - 1, zone), day, zone)
+    assert.equal(T.dayKey(to, zone), '2026-08-20', zone)
+    // Half-open, so consecutive days meet exactly rather than overlapping.
+    assert.equal(T.startOf('2026-08-20', zone), to, zone)
+  }
+
+  // Days are not all 24 hours long. Read at the wrong instant the offset is the
+  // one either side of the change, and the day would start an hour off — on the
+  // spring-forward day, inside an hour that does not exist.
+  const ny = 'America/New_York'
+  const hours = (day) => (T.endOf(day, ny) - T.startOf(day, ny)) / 3_600_000
+  assert.equal(hours('2026-03-08'), 23)
+  assert.equal(hours('2026-11-01'), 25)
+  assert.equal(hours('2026-06-01'), 24)
+  assert.equal(T.dayKey(T.startOf('2026-03-08', ny), ny), '2026-03-08')
 })
 
 test('totals sum a day and a month from the same buckets', () => {
