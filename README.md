@@ -85,8 +85,11 @@ conversation never reaches it. That stops being true if the bot is made a group
 administrator, or if privacy mode is turned off in @BotFather: then the whole
 group's chatter goes to that service on your key, and nothing here rate-limits it.
 
-An order is filed under the date Play stamped it, which is what lets `/recount`
-speak about the same day the tally does.
+An order is filed under the UTC date Play stamped it, and a day's total runs
+from UTC midnight to UTC midnight. That is what lets `/recount` — which asks Play
+for a window in absolute time — speak about the same day the tally does. If you
+are east of Greenwich, `/today` therefore starts over later than your own
+midnight: 09:00 in Seoul.
 
 `/recount` on its own fetches everything again; give it a period to narrow it —
 `today`, `20` for this month's twentieth, `08-20` for this year, `2026-08-20`,
@@ -111,7 +114,7 @@ with it — until a `/recount` of that day supersedes them.
 | New orders / refunds | both on | Which events to announce |
 | Only these apps | all | Package names |
 | Minimum payout | 0 | Set 1 to hide zero-value test orders |
-| Local time / UTC | UTC only | Turn on local time to get both, one per zone |
+| Local time / UTC | UTC only | Turn on local time to get both, one per line. The day a total counts under is UTC either way |
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
 | API key | — | Optional; lets the bot answer anything that is not a command |

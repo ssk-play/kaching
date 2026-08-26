@@ -78,7 +78,7 @@
     "message": "Show time in UTC"
   },
   "hintTimes": {
-    "message": "Play records order times in UTC. Turn both on to see them side by side."
+    "message": "Play records order times in UTC, and a day's total runs from UTC midnight to UTC midnight. Turn both on to see your own clock beside it."
   },
   "lblInterval": {
     "message": "Check every (minutes)"
