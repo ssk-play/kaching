@@ -186,7 +186,7 @@
     "message": "구매"
   },
   "notifNewSub": {
-    "message": "구독"
+    "message": "새구독"
   },
   "notifSubRenewal": {
     "message": "구독 $1회차"
@@ -272,9 +272,6 @@
   "logFailCount": {
     "message": "$1회째 실패"
   },
-  "labelNet": {
-    "message": "순수익"
-  },
   "totalToday": {
     "message": "오늘 $2건 · $1"
   },
@@ -292,6 +289,18 @@
   },
   "hintDailyTotal": {
     "message": "주문 메시지마다 그날 알린 누계를 한 줄로 덧붙입니다. /today · /month 응답은 이 설정과 무관하게 동작하며, 여기서는 푸터만 켜고 끕니다."
+  },
+  "lblSample": {
+    "message": "미리보기"
+  },
+  "sampleBuy": {
+    "message": "구매"
+  },
+  "sampleSub": {
+    "message": "첫 구독"
+  },
+  "sampleRenewal": {
+    "message": "구독 갱신"
   },
   "lblAiKey": {
     "message": "API 키"
@@ -433,9 +442,6 @@
   },
   "labelFee": {
     "message": "수수료 $1%"
-  },
-  "labelNetAssumed": {
-    "message": "예상 순수익 · 수수료 $1% 가정"
   },
   "lblBreakdown": {
     "message": "세금·수수료 내역 표시"

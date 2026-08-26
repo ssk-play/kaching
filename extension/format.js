@@ -183,32 +183,28 @@ function heading(order) {
 // only part of it that can be edited later, so a name on its own leaves the
 // reader guessing which SKU sold — and if it has since been renamed, unable to
 // find it at all. A name identical to the id is not printed twice.
-function product(order) {
-  const { sku, product: name } = order
-  if (sku && name && name !== sku) return `${sku}(${name})`
-  return sku || name || ''
-}
+// The id, not the display name. "apt_yearly" is what a console, a receipt and a
+// support ticket all call this thing; "Premium Yearly (AirPlay Touch)" is what
+// the store listing calls it, and carrying both put a parenthesis inside a line
+// that already had a comma in it. The name is kept as a fallback for a product
+// that arrives without an id.
+const product = (order) => order.sku || order.product || ''
 
 export function describe(order, settings, fx = {}) {
   const head = heading(order)
 
-  // The arrow used to run charged -> payout with nothing saying what the second
-  // number was; naming it is the difference between a figure and a fact.
-  const net = estimatedNet(order, fx)
-  const fee = feeRate(order, fx)
-  // A guessed figure has to say so on the line it appears on. The breakdown is
-  // off by default, so leaving the disclaimer there would hide it from almost
-  // everyone — and a guess that looks like a settled payout is the one failure
-  // this line cannot afford.
+  // What the buyer paid, then what lands in the account. Two figures, no arrow
+  // and no labels: the order they are in says which is which, and the currencies
+  // say it again. This line used to carry "est. net, 15% fee assumed" on every
+  // order Play had not settled yet — true, and read every day by someone who
+  // already knew it.
   //
-  // The other half of that bargain is that a figure Play has settled is not
-  // hedged. `derived: false` is only ever returned for an order with no reported
-  // net, so the assumed label and the plain one divide exactly on whether Play
-  // has paid out — which is the only question the label can usefully answer.
-  const netLabel = fee && !fee.derived ? t('labelNetAssumed', fee.percent) : t('labelNet')
-  const price = [money(order.total), net ? `→ ${money(net)} ${netLabel}` : '']
-    .filter(Boolean)
-    .join(' ')
+  // Losing that flag is affordable now in a way it was not before: an estimate
+  // is banked as an estimate, and when Play settles, the difference moves into
+  // the day by itself and the chat is told. The figure corrects itself, so the
+  // line no longer has to warn that it might need to.
+  const net = estimatedNet(order, fx)
+  const price = [money(order.total), net ? money(net) : ''].filter(Boolean).join(', ')
 
   // Tax withheld, the rate charged, and — when the estimate crossed currencies —
   // the rate it crossed at. Between them the price line above can be recomputed,
@@ -216,6 +212,7 @@ export function describe(order, settings, fx = {}) {
   // leave the one reader who checks the arithmetic unable to reach the figure.
   // The net itself is not repeated here — it would be the same label twice, once
   // per currency, with nothing saying which was which.
+  const fee = feeRate(order, fx)
   const crossed = rateFor(netBefore(order)?.currency, fx.currency, fx.rates)
   const breakdown =
     settings.showBreakdown && (order.tax || fee?.derived || crossed)
@@ -238,9 +235,12 @@ export function describe(order, settings, fx = {}) {
       : ''
 
   // One question per line: what kind of sale, what sold and from which app, for
-  // how much and where, when, and which order. Grouped that way because neither
+  // how much and where, which order, and when. Grouped that way because neither
   // half of those middle lines is worth much read on its own — an app with no
   // product, a price with no country.
+  //
+  // The id sits above the time because that is the order they are wanted in: the
+  // id is what gets copied into the Console, the time is what gets glanced at.
   //
   // Five lines is the default shape, not a contract: the breakdown is a sixth
   // when switched on, and a line whose fields are all missing drops rather than
@@ -254,8 +254,8 @@ export function describe(order, settings, fx = {}) {
     [order.packageName, product(order)].filter(Boolean).join(', '),
     [order.country, price].filter(Boolean).join(', '),
     breakdown,
-    times(order.at, settings),
     order.id,
+    times(order.at, settings),
   ]
     .filter(Boolean)
     .join('\n')

@@ -31,15 +31,15 @@ back**, so `/today` changes with it. `/adjust` patches a day by hand instead:
 ```
 
 An order reads as five lines — what kind of sale, what sold and from which app,
-for how much and where, when, and which order — with the day's running total
+for how much and where, which order, and when — with the day's running total
 under it:
 
 ```
 구독 4회차
-com.example.app, premium_unlock(프리미엄 잠금해제)
-IN, INR 399 → KRW 4,600 순수익
-2026-08-23 02:01 UTC
+com.example.app, premium_unlock
+IN, INR 399, KRW 4,600
 GPA.1111-2222-3333-44444..2
+2026-08-23 11:01 GMT+9
 오늘 11건 · KRW 56,671 · 환불 2건 KRW -9,100
 ```
 
@@ -91,10 +91,12 @@ It defaults to the browser's own and is a setting because that machine is not
 always where you are — and because a UTC tally is a legitimate thing to want,
 since UTC is what the Play Console reports.
 
-That last part is why the order line can carry two clocks: the left one is the
-day the running total beneath it belongs to, the right one is the day the
-Console will show for the same order. Change the zone after orders are counted
-and the days already filed keep the old one — Reset, then `/recount`.
+That is also why the order line can be made to carry two clocks: the left one
+is the day the running total beneath it belongs to, the right one is the day the
+Console will show for the same order. It is off by default — one instant written
+twice is a line that gets skipped rather than read. Change the zone after orders
+are counted and the days already filed keep the old one — Reset, then
+`/recount`.
 
 `/recount` on its own fetches everything again; give it a period to narrow it —
 `today`, `20` for this month's twentieth, `08-20` for this year, `2026-08-20`,
@@ -120,7 +122,7 @@ with it — until a `/recount` of that day supersedes them.
 | Only these apps | all | Package names |
 | Minimum payout | 0 | Set 1 to hide zero-value test orders |
 | Time zone | this browser's | The day an order counts under, and when `/today` resets |
-| Zone time / UTC | both on | Two clocks on one line; turn off whichever you do not read |
+| Zone time / UTC | zone only | Turn on UTC to get both on one line, for reconciling with the Console |
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
 | API key | — | Optional; lets the bot answer anything that is not a command |

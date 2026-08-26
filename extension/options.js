@@ -116,20 +116,65 @@ fill(settings)
 
 // --------------------------------------------------------------------- preview
 
-const SAMPLE = {
-  id: 'GPA.1234-5678-9012-34567',
-  state: 'charged',
-  subscription: false,
-  product: 'Premium',
-  sku: 'premium_unlock',
-  packageName: 'com.example.app',
-  country: 'KR',
-  total: { currency: 'USD', amount: 4.99 },
-  beforeFee: { currency: 'USD', amount: 4.54 },
-  tax: { currency: 'USD', amount: 0.45 },
-  net: { currency: 'USD', amount: 3.86 },
-  payout: { currency: 'KRW', amount: 5020 },
-  at: Date.now(),
+// One order per kind of message the bot sends, because the differences between
+// them are exactly what a preview is for: a renewal has to be tellable from a
+// first subscription at a glance, and neither from a one-off purchase.
+//
+// A settled purchase and two unsettled subscriptions, which is also the real
+// mix: Play reports the payout on the first and leaves the others to be
+// estimated from the price.
+const SAMPLES = {
+  sampleBuy: {
+    id: 'GPA.1234-5678-9012-34567',
+    state: 'charged',
+    subscription: false,
+    product: 'Premium',
+    sku: 'premium_unlock',
+    packageName: 'com.example.app',
+    country: 'KR',
+    total: { currency: 'USD', amount: 4.99 },
+    beforeFee: { currency: 'USD', amount: 4.54 },
+    tax: { currency: 'USD', amount: 0.45 },
+    net: { currency: 'USD', amount: 3.86 },
+    payout: { currency: 'KRW', amount: 5020 },
+    at: Date.now(),
+  },
+  sampleSub: {
+    id: 'GPA.2345-6789-0123-45678',
+    state: 'charged',
+    subscription: true,
+    product: 'Premium Yearly',
+    sku: 'premium_yearly',
+    packageName: 'com.example.app',
+    country: 'CA',
+    total: { currency: 'CAD', amount: 23.93 },
+    tax: { currency: 'CAD', amount: 2.94 },
+    at: Date.now(),
+  },
+  // Play appends "..N" to the id once a subscription starts renewing, and "..1"
+  // is the third charge. The suffix is the only thing that says so, which is why
+  // the heading is worth previewing.
+  sampleRenewal: {
+    id: 'GPA.2345-6789-0123-45678..1',
+    state: 'charged',
+    subscription: true,
+    product: 'Premium Yearly',
+    sku: 'premium_yearly',
+    packageName: 'com.example.app',
+    country: 'CA',
+    total: { currency: 'CAD', amount: 23.93 },
+    tax: { currency: 'CAD', amount: 2.94 },
+    at: Date.now(),
+  },
+}
+
+// Enough of a rate table for the unsettled samples to show a payout figure at
+// all — without one they would preview a line the reader never sees, missing the
+// second half of its price.
+const SAMPLE_FX = { currency: 'KRW', rates: { 'CAD>KRW': 998.18 } }
+
+for (const key of Object.keys(SAMPLES)) {
+  $('sample').append(new Option(t(key), key))
 }
 
 // A day already under way, so the footer shows what it will actually look like
@@ -141,10 +186,12 @@ const SAMPLE_DAY = {
 const renderPreview = () => {
   const s = read()
   const footer = s.showDailyTotal ? totalLine('totalToday', SAMPLE_DAY) : null
-  $('preview').textContent = [describe(SAMPLE, s), footer].filter(Boolean).join('\n')
+  const order = SAMPLES[$('sample').value] ?? SAMPLES.sampleBuy
+  $('preview').textContent = [describe(order, s, SAMPLE_FX), footer].filter(Boolean).join('\n')
 }
 for (const id of [
-  'senderName', 'timeZone', 'showLocalTime', 'showUtcTime', 'showBreakdown', 'showDailyTotal',
+  'sample', 'senderName', 'timeZone', 'showLocalTime', 'showUtcTime', 'showBreakdown',
+  'showDailyTotal',
 ]) {
   $(id).addEventListener('input', renderPreview)
 }

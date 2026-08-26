@@ -32,11 +32,12 @@ export const DEFAULTS = {
   timeZone: '',
 
   // message format
-  // The zone above, then UTC. One clock is enough for reading the message and
-  // the second is for reconciling it against the Console, which reports in UTC —
-  // so it starts on, and turns off for anyone who never does that.
+  // One clock, in the zone above — the zone the day under the order is counted
+  // in. UTC is the second, for reconciling against the Play Console, and it is
+  // off: two renderings of one instant is the kind of line that gets skipped
+  // rather than read.
   showLocalTime: true,
-  showUtcTime: true,
+  showUtcTime: false,
   showBreakdown: false,
   showDailyTotal: true,
 
