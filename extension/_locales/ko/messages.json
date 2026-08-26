@@ -174,13 +174,13 @@
     "message": "첫 동기화: 주문 $1 건을 알림 없이 기록했습니다."
   },
   "notifNewOrder": {
-    "message": "새 주문"
+    "message": "구매"
   },
   "notifNewSub": {
-    "message": "새 구독"
+    "message": "구독"
   },
   "notifSubRenewal": {
-    "message": "구독 재결제 · 결제 $1회차"
+    "message": "구독 $1회차"
   },
   "notifRefund": {
     "message": "환불"
@@ -201,7 +201,7 @@
     "message": "…외 $1 건이 더 있습니다."
   },
   "tgFailHeader": {
-    "message": "카칭"
+    "message": "카칭이 동작하지 않고 있습니다."
   },
   "tgFailAuth": {
     "message": "Play Console 로그인이 풀렸습니다. 이 브라우저에서 다시 로그인해 주세요."
@@ -267,10 +267,10 @@
     "message": "예상 순수익"
   },
   "totalToday": {
-    "message": "오늘 $1 · $2건"
+    "message": "오늘 $2건 · $1"
   },
   "totalMonth": {
-    "message": "이번 달 $1 · $2건"
+    "message": "이번 달 $2건 · $1"
   },
   "totalRefunds": {
     "message": "환불 $1건"
@@ -315,16 +315,16 @@
     "message": "명령어가 아닌 말은 누계에 대한 질문으로 알아듣고 답합니다."
   },
   "totalDay": {
-    "message": "$1 · $2건"
+    "message": "$2건 · $1"
   },
   "totalDayOne": {
-    "message": "$1 · $2건"
+    "message": "$2건 · $1"
   },
   "totalRecount": {
-    "message": "Play 재집계 $1 · $2건"
+    "message": "Play 재집계 $2건 · $1"
   },
   "totalRecountOne": {
-    "message": "Play 재집계 $1 · $2건"
+    "message": "Play 재집계 $2건 · $1"
   },
   "totalRecountCappedAt": {
     "message": "$2 은 하루에 $1건이 넘어 온전히 받아오지 못해 그대로 두었습니다"
@@ -375,10 +375,10 @@
     "message": "$1 응답"
   },
   "totalTodayOne": {
-    "message": "오늘 $1 · $2건"
+    "message": "오늘 $2건 · $1"
   },
   "totalMonthOne": {
-    "message": "이번 달 $1 · $2건"
+    "message": "이번 달 $2건 · $1"
   },
   "totalRefundsOne": {
     "message": "환불 $1건"
@@ -396,10 +396,10 @@
     "message": "봇 명령 메뉴 등록 실패 ($1)"
   },
   "totalWeek": {
-    "message": "이번 주 $1 · $2건"
+    "message": "이번 주 $2건 · $1"
   },
   "totalWeekOne": {
-    "message": "이번 주 $1 · $2건"
+    "message": "이번 주 $2건 · $1"
   },
   "labelRate": {
     "message": "$1→$2 $3"

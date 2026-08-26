@@ -161,11 +161,25 @@ export function feeRate(order, fx = {}) {
   return estimatedNet(order, fx) ? { percent: DEFAULT_FEE * 100, derived: false } : null
 }
 
+// No emoji. A line of chat that leads with a pictogram reads as an
+// advertisement, and this one is a record — the word says the same thing and
+// says it in the reader's own language.
 function heading(order) {
-  if (order.state === 'refunded') return `↩️ ${t('notifRefund')}`
+  if (order.state === 'refunded') return t('notifRefund')
   const cycle = cycleOf(order)
-  if (cycle == null) return `🔔 ${t('notifNewOrder')}`
-  return cycle > 1 ? `🔁 ${t('notifSubRenewal', cycle)}` : `🔔 ${t('notifNewSub')}`
+  if (cycle == null) return t('notifNewOrder')
+  return cycle > 1 ? t('notifSubRenewal', cycle) : t('notifNewSub')
+}
+
+// The id leads and the name follows in brackets. The product id is what the
+// Console, the Play API and your own code all key on; the display name is the
+// only part of it that can be edited later, so a name on its own leaves the
+// reader guessing which SKU sold — and if it has since been renamed, unable to
+// find it at all. A name identical to the id is not printed twice.
+function product(order) {
+  const { sku, product: name } = order
+  if (sku && name && name !== sku) return `${sku}(${name})`
+  return sku || name || ''
 }
 
 export function describe(order, settings, fx = {}) {
@@ -211,18 +225,22 @@ export function describe(order, settings, fx = {}) {
           .join(' · ')
       : ''
 
-  // The product ID is what the Console, the Play API and your own code all key
-  // on; the display name is the only part of it that can be edited later. A
-  // name on its own leaves the reader guessing which SKU actually sold.
-  const product = [order.product, order.sku === order.product ? '' : order.sku]
-    .filter(Boolean)
-    .join(' · ')
-
+  // One question per line: what kind of sale, what sold and from which app, for
+  // how much and where, when, and which order. Grouped that way because neither
+  // half of those middle lines is worth much read on its own — an app with no
+  // product, a price with no country.
+  //
+  // Five lines is the default shape, not a contract: the breakdown is a sixth
+  // when switched on, and a line whose fields are all missing drops rather than
+  // printing a bare separator. Nothing downstream may assume a fixed count.
+  //
+  // The commas are the requested format, spelled that way by the person who has
+  // to read these every day — not a rule derived from anything. Elsewhere in
+  // this module " · " still separates figures within a line.
   return [
     settings.senderName ? `[${settings.senderName}] ${head}` : head,
-    product,
-    [order.packageName, order.country].filter(Boolean).join(' · '),
-    price,
+    [order.packageName, product(order)].filter(Boolean).join(', '),
+    [order.country, price].filter(Boolean).join(', '),
     breakdown,
     times(order.at, settings),
     order.id,

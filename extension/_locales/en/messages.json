@@ -174,13 +174,13 @@
     "message": "First sync: recorded $1 orders without notifying."
   },
   "notifNewOrder": {
-    "message": "New order"
+    "message": "Purchase"
   },
   "notifNewSub": {
-    "message": "New subscription"
+    "message": "Subscription"
   },
   "notifSubRenewal": {
-    "message": "Subscription renewal · charge #$1"
+    "message": "Subscription · charge #$1"
   },
   "notifRefund": {
     "message": "Refund"
@@ -201,7 +201,7 @@
     "message": "…and $1 more."
   },
   "tgFailHeader": {
-    "message": "Kaching"
+    "message": "Kaching is not working."
   },
   "tgFailAuth": {
     "message": "Your Play Console session expired. Sign in again in this browser."
@@ -267,10 +267,10 @@
     "message": "est. net"
   },
   "totalToday": {
-    "message": "Today $1 · $2 orders"
+    "message": "Today $2 orders · $1"
   },
   "totalMonth": {
-    "message": "This month $1 · $2 orders"
+    "message": "This month $2 orders · $1"
   },
   "totalRefunds": {
     "message": "$1 refunds"
@@ -315,16 +315,16 @@
     "message": "Anything else you type here is answered as a question about the totals."
   },
   "totalDay": {
-    "message": "$1 · $2 orders"
+    "message": "$2 orders · $1"
   },
   "totalDayOne": {
-    "message": "$1 · $2 order"
+    "message": "$2 order · $1"
   },
   "totalRecount": {
-    "message": "Recounted from Play $1 · $2 orders"
+    "message": "Recounted from Play $2 orders · $1"
   },
   "totalRecountOne": {
-    "message": "Recounted from Play $1 · $2 order"
+    "message": "Recounted from Play $2 order · $1"
   },
   "totalRecountCappedAt": {
     "message": "$2 could not be fetched whole (more than $1 orders in a day), so it was left alone"
@@ -375,10 +375,10 @@
     "message": "Answered $1"
   },
   "totalTodayOne": {
-    "message": "Today $1 · $2 order"
+    "message": "Today $2 order · $1"
   },
   "totalMonthOne": {
-    "message": "This month $1 · $2 order"
+    "message": "This month $2 order · $1"
   },
   "totalRefundsOne": {
     "message": "$1 refund"
@@ -396,10 +396,10 @@
     "message": "Could not register the bot command menu ($1)"
   },
   "totalWeek": {
-    "message": "This week $1 · $2 orders"
+    "message": "This week $2 orders · $1"
   },
   "totalWeekOne": {
-    "message": "This week $1 · $2 order"
+    "message": "This week $2 order · $1"
   },
   "labelRate": {
     "message": "$1→$2 $3"
