@@ -13,20 +13,31 @@ const say = (text, cls = '') => {
   log.className = cls
 }
 
-// The question test answers beside the fields it tests. Sent to the page footer
-// instead, a multi-line answer would appear somewhere the reader is not looking
-// after clicking a button halfway up the page.
-const sayAi = (text, cls = '') => {
-  const out = $('aiLog')
+// A button halfway up the page answers beside the field it is about. Sent to the
+// page footer instead, what it said would appear somewhere the reader is not
+// looking — and the chat search in particular answers with a list of chats to
+// choose between, which is no use out of sight of the box it fills in.
+const beside = (id) => (text, cls = '') => {
+  const out = $(id)
   out.textContent = text
   out.className = cls
 }
+
+const sayAi = beside('aiLog')
+const sayChat = beside('chatLog')
 
 // ------------------------------------------------------------------------ i18n
 
 document.title = t('optTitle')
 for (const el of document.querySelectorAll('[data-i18n]')) {
   el.textContent = t(el.dataset.i18n)
+}
+// A placeholder that shows the very question an empty box will ask, rather than
+// an example of one. Set from here because the catalogue is the only place that
+// text exists — written into the HTML it would be one locale's, and would drift
+// from what the button actually sends the first time either is reworded.
+for (const el of document.querySelectorAll('[data-i18n-placeholder]')) {
+  el.placeholder = t(el.dataset.i18nPlaceholder)
 }
 
 // ------------------------------------------------------------------- form <-> storage
@@ -38,6 +49,7 @@ const CHECKBOXES = [
 const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
 const TEXTS = [
   'botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey', 'aiBaseUrl', 'aiModel',
+  'aiProbe',
 ]
 
 function fill(settings) {
@@ -157,18 +169,18 @@ $('save').addEventListener('click', async () => {
 
 $('findChat').addEventListener('click', async () => {
   const botToken = $('botToken').value.trim()
-  if (!botToken) return say(t('msgNeedToken'), 'err')
-  if (!/^\d+:[\w-]{30,}$/.test(botToken)) return say(t('msgBadToken'), 'err')
+  if (!botToken) return sayChat(t('msgNeedToken'), 'err')
+  if (!/^\d+:[\w-]{30,}$/.test(botToken)) return sayChat(t('msgBadToken'), 'err')
 
-  say(t('msgSearching'))
+  sayChat(t('msgSearching'))
   const res = await ask('findChatId', { botToken })
   if (!res.ok) {
-    return say(res.error + (/401|Unauthorized/.test(res.error) ? t('msgUnauthorized') : ''), 'err')
+    return sayChat(res.error + (/401|Unauthorized/.test(res.error) ? t('msgUnauthorized') : ''), 'err')
   }
-  if (!res.result.length) return say(t('msgNoChat'), 'err')
+  if (!res.result.length) return sayChat(t('msgNoChat'), 'err')
 
   $('chatId').value = res.result[0].id
-  say(t('msgChatFilled', res.result.map((c) => `${c.id} ${c.name}`).join('\n')), 'ok')
+  sayChat(t('msgChatFilled', res.result.map((c) => `${c.id} ${c.name}`).join('\n')), 'ok')
 })
 
 $('test').addEventListener('click', async () => {
@@ -200,8 +212,18 @@ $('testAi').addEventListener('click', async () => {
     return sayAi(t('msgNeedAiHost'), 'err')
   }
 
+  // Taken from the box as it stands, not from what was saved. The key, the host
+  // and the model have to be saved because the worker reads them from storage
+  // and the host permission is granted on save; the question does not — and
+  // making someone save before every attempt would turn trying three phrasings
+  // into three round trips through the form.
+  //
+  // An empty box asks what the placeholder shows, resolved here rather than in
+  // the worker: a box cleared without saving would otherwise send nothing and
+  // fall back to the saved question, which is not the one the reader is looking
+  // at.
   sayAi(t('msgAsking', saved.aiModel))
-  const res = await ask('testAi')
+  const res = await ask('testAi', { question: $('aiProbe').value.trim() || t('cmdAiProbe') })
   sayAi(res.ok ? t('msgAiAnswered', res.result) : res.error, res.ok ? 'ok' : 'err')
 })
 

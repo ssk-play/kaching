@@ -61,7 +61,7 @@ function normalize(o) {
   }
 }
 
-async function request({ developerId, days, pageSize, origin }) {
+async function request({ developerId, days, from, to, pageSize, origin }) {
   const headers = [
     'Content-Type:application/json+protobuf',
     'X-Goog-AuthUser:0',
@@ -69,7 +69,12 @@ async function request({ developerId, days, pageSize, origin }) {
     `X-Goog-Api-Key:${API_KEY}`,
   ].join('\r\n')
 
+  // A window if one was named, otherwise the last `days` up to now. Named
+  // windows are what let a long span be walked in pieces Play will actually
+  // serve: asked for a year in one request it answers 500, not fewer orders.
   const now = Math.floor(Date.now() / 1000)
+  const since = from == null ? now - days * 86400 : Math.floor(from / 1000)
+  const until = to == null ? now + 86400 : Math.floor(to / 1000)
   return fetch(
     `${HOST}/v1/developer/${developerId}/orders:fetch?%24httpHeaders=${encodeURIComponent(headers)}`,
     {
@@ -77,7 +82,7 @@ async function request({ developerId, days, pageSize, origin }) {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json+protobuf' },
       body: JSON.stringify({
-        4: { 1: { 1: String(now - days * 86400), 2: 0 }, 2: { 1: String(now + 86400), 2: 0 }, 3: '' },
+        4: { 1: { 1: String(since), 2: 0 }, 2: { 1: String(until), 2: 0 }, 3: '' },
         5: { 1: String(developerId) },
         7: '',
         8: pageSize,
@@ -86,7 +91,7 @@ async function request({ developerId, days, pageSize, origin }) {
   )
 }
 
-export async function fetchOrders({ developerId, days = 2, pageSize = 50 }) {
+export async function fetchOrders({ developerId, days = 2, from, to, pageSize = 50 }) {
   const { workingOrigin } = await chrome.storage.local.get({ workingOrigin: null })
   const candidates = ORIGIN_CANDIDATES.map((o) => (typeof o === 'function' ? o() : o))
   const ordered = workingOrigin
@@ -95,7 +100,7 @@ export async function fetchOrders({ developerId, days = 2, pageSize = 50 }) {
 
   let last = null
   for (const origin of ordered) {
-    const res = await request({ developerId, days, pageSize, origin })
+    const res = await request({ developerId, days, from, to, pageSize, origin })
     if (res.ok) {
       if (origin !== workingOrigin) await chrome.storage.local.set({ workingOrigin: origin })
       const data = await res.json()
