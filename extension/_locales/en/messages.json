@@ -194,6 +194,9 @@
   "tgRecovered": {
     "message": "Kaching recovered."
   },
+  "tgSettled": {
+    "message": "Play settled $1 order(s) differently than estimated · total moved $2"
+  },
   "tgMore": {
     "message": "…and $1 more."
   },
@@ -299,8 +302,14 @@
   "hintAiModel": {
     "message": "The model name that service expects. Bigger is not better here — the answer is a few rows read back to you."
   },
+  "lblAiProbe": {
+    "message": "Test question"
+  },
+  "hintAiProbe": {
+    "message": "What the button below asks. Leave it empty to ask the one shown. Saved with the rest, but the button always sends what is in the box."
+  },
   "cmdHelp": {
-    "message": "Send /today, /week or /month for a running total. /recount works a day out again from Play; /adjust corrects one by hand."
+    "message": "Send /today, /week or /month for a running total. /recount fetches from Play again — everything, or a day, a month or a year; /adjust corrects a day by hand."
   },
   "cmdHelpAsk": {
     "message": "Anything else you type here is answered as a question about the totals."
@@ -317,17 +326,29 @@
   "totalRecountOne": {
     "message": "Recounted from Play $1 · $2 order"
   },
-  "totalRecountCapped": {
-    "message": "first $1 orders only"
+  "totalRecountCappedAt": {
+    "message": "$2 could not be fetched whole (more than $1 orders in a day), so it was left alone"
+  },
+  "totalRecountReached": {
+    "message": "only reached back to $1 — ask for anything earlier as its own period"
   },
   "totalRecountMoved": {
     "message": "was $1"
+  },
+  "totalRecountMovedDays": {
+    "message": "$1 days moved, $2 in all"
+  },
+  "totalRecountAdopted": {
+    "message": "$1 not previously counted"
+  },
+  "totalRecountCleared": {
+    "message": "$1 day(s) of /adjust corrections dropped as superseded"
   },
   "totalRecountSame": {
     "message": "already matched"
   },
   "totalRecountUntouched": {
-    "message": "nothing announced for that day, so it was left alone"
+    "message": "nothing announced there, so it was left alone"
   },
   "cmdAdjust": {
     "message": "Correct a day's total by an amount, + or -"
@@ -339,13 +360,16 @@
     "message": "Work a day out again from Play, by charge date"
   },
   "cmdRecountUsage": {
-    "message": "That day is outside what Play will return here. Try /recount or /recount with a day inside the last $1."
+    "message": "Send /recount on its own to fetch everything again, or name a period: today, 20 for the 20th of this month, 08-20 for this year, 2026-08-20 for that day, 2026-08 for a month, 2026 for a year. Nothing further back than $1 days."
   },
   "logAdjust": {
     "message": "$1 corrected by $2"
   },
   "logRecount": {
     "message": "$1 recounted from Play"
+  },
+  "logSettled": {
+    "message": "Play settled $1 order(s) at a different figure, $2 in all"
   },
   "logAnswered": {
     "message": "Answered $1"
@@ -429,6 +453,6 @@
     "message": "It answered:\n\n$1"
   },
   "cmdAiProbe": {
-    "message": "How much has today brought in so far?"
+    "message": "How did the last week go, day by day — and which currency brought in the most?"
   }
 }

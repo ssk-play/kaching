@@ -29,7 +29,10 @@
     border: 1px solid var(--line); background: transparent; color: inherit;
   }
   button#save { font-weight: 600; border-color: currentColor; }
-  #log, #aiLog { margin-top: 1rem; min-height: 1.6em; white-space: pre-wrap; font-size: .92em; }
+  #log, #aiLog, #chatLog { margin-top: 1rem; min-height: 1.6em; white-space: pre-wrap; font-size: .92em; }
+  /* This one sits between two fields rather than at the end of a section, so it
+     takes no room until it has something to say. */
+  #chatLog:empty { display: none; margin: 0; min-height: 0; }
   .ok { color: #2e7d32; } .err { color: #c62828; }
   #setup { padding: .75rem 1rem; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
   .logbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .6rem; }
@@ -66,6 +69,11 @@
 <label class="field" for="chatId" data-i18n="lblChatId"></label>
 <input id="chatId" type="text" autocomplete="off" spellcheck="false" placeholder="123456789" />
 <div class="hint" data-i18n="hintChatId"></div>
+
+<div class="row" style="margin-top:.6rem">
+  <button id="findChat" data-i18n="btnFindChat"></button>
+</div>
+<div id="chatLog"></div>
 
 <label class="field" for="senderName" data-i18n="lblSender"></label>
 <input id="senderName" type="text" autocomplete="off" />
@@ -121,6 +129,10 @@
 <input id="aiModel" type="text" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini" />
 <div class="hint" data-i18n="hintAiModel"></div>
 
+<label class="field" for="aiProbe" data-i18n="lblAiProbe"></label>
+<input id="aiProbe" type="text" autocomplete="off" data-i18n-placeholder="cmdAiProbe" />
+<div class="hint" data-i18n="hintAiProbe"></div>
+
 <div class="row" style="margin-top:1rem">
   <button id="testAi" data-i18n="btnTestAi"></button>
 </div>
@@ -143,7 +155,6 @@
 
 <div class="row">
   <button id="save" data-i18n="btnSave"></button>
-  <button id="findChat" data-i18n="btnFindChat"></button>
   <button id="test" data-i18n="btnTest"></button>
   <button id="checkNow" data-i18n="btnCheckNow"></button>
   <button id="showStatus" data-i18n="btnStatus"></button>

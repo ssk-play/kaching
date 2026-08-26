@@ -33,6 +33,11 @@ export const DEFAULTS = {
   aiKey: '',
   aiBaseUrl: 'https://api.openai.com/v1',
   aiModel: 'gpt-4o-mini',
+  // What the test button asks. Empty means the built-in probe, so a reader who
+  // never touches it still gets a question that exercises a tool call — and one
+  // who is chasing a particular wrong answer can put that question here and ask
+  // it again without going back to Telegram each time.
+  aiProbe: '',
 
   // schedule
   intervalMinutes: 10,

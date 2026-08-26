@@ -69,11 +69,21 @@ administrator, or if privacy mode is turned off in @BotFather: then the whole
 group's chatter goes to that service on your key, and nothing here rate-limits it.
 
 An order is filed under the date Play stamped it, which is what lets `/recount`
-speak about the same day the tally does. The recount counts only orders the bot
-already announced, so one still on its way is not counted twice, and a day it
-finds nothing for is reported and left alone. `/adjust` keeps its corrections
-apart from the tally and they are read together with it — until a `/recount` of
-that day supersedes them.
+speak about the same day the tally does.
+
+`/recount` on its own fetches everything again; give it a period to narrow it —
+`today`, `20` for this month's twentieth, `08-20` for this year, `2026-08-20`,
+`2026-08` for a month, `2026` for a year. It counts **everything Play still
+shows** for those days, not only what was announced, so it is also how history
+that predates the install gets into the books. Two things it will not do: a day
+it finds nothing for is reported and left alone rather than zeroed, and if the
+response came back full it names the oldest day and leaves that one too, since
+it may have arrived in part. An order it counts is marked as delivered so the
+next check cannot announce it and count it twice — which does mean a recount
+run in the same minute as a sale can swallow that one notification.
+
+`/adjust` keeps its corrections apart from the tally and they are read together
+with it — until a `/recount` of that day supersedes them.
 
 ## Settings
 
@@ -94,8 +104,10 @@ that day supersedes them.
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |
 
-The first run records what is already there without notifying; only new orders
-are announced after that.
+The first run records what is already there without notifying, and banks it at
+zero so the totals start from your install rather than from your first ever
+sale; only new orders are announced after that. Send `/recount` once if you want
+that history in the figures.
 
 ## How it works
 
