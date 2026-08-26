@@ -45,7 +45,7 @@ GPA.1111-2222-3333-44444..2
 
 ## Asking in plain words
 
-The five commands answer five fixed questions. Put an API key in the settings
+The fixed commands answer fixed questions. Put an API key in the settings
 and anything else you type is answered too — no prefix, no menu entry to find:
 
 ```
@@ -56,12 +56,15 @@ and anything else you type is answered too — no prefix, no menu entry to find:
 ```
 
 The last four exchanges are kept for half an hour, which is what lets the second
-question mean anything. After that a question stands on its own again.
+question mean anything. After that a question stands on its own again. `/compact`
+boils what has been said so far down to a recap and shows it to you — the thread
+carries on from that instead of from the full exchanges, so it keeps its subject
+without keeping its bulk.
 
 It reads the same tally `/today` answers from and cannot write to it, so the
 worst it can do is say something wrong — and it is asked to quote the figures it
 read, so you can check the sentence against them. Anything starting with `/` that
-is not one of the five is left alone, so a mistyped command is not paid for.
+is not a command it knows is left alone, so a mistyped command is not paid for.
 
 What leaves the browser is what you typed and the daily figures needed to answer
 it — amounts, order and refund counts, one row per day — sent to whichever

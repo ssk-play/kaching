@@ -151,6 +151,51 @@ const resultsFor = (calls, tools) =>
     }),
   )
 
+// What /compact keeps. Short on purpose: it is resent with every question for
+// the next half hour, so a summary as long as the turns it replaced would cost
+// more than it saved.
+const MAX_SUMMARY = 600
+
+// No tools, and none offered. A summary is written from what was already said —
+// a model that went back to the ledger here would be paying to re-read days in
+// order to describe a conversation about them, and could quietly contradict the
+// answer the reader was actually given.
+const CONDENSE = [
+  'You are compacting a short chat between a Google Play developer and an assistant that',
+  'reads their sales tally.',
+  'Write a brief recap of the exchange above, so that a follow-up question like "그럼 지난달은?"',
+  'still has something to refer to.',
+  'Keep the subject, the days or currencies asked about, and any figure that was quoted,',
+  'with its currency. Drop the pleasantries and anything already superseded.',
+  'Write it in the language the developer was using, as a few short lines of plain text.',
+  'No Markdown, no preamble, and do not add a figure that was not said above.',
+].join(' ')
+
+// A synthetic turn, in the same shape as a real one, so the replay in ask()
+// needs no special case for it and a compacted conversation can be compacted
+// again. Phrased as something the developer could have asked, because that is
+// the only role the history has to put it in.
+export const RECAP = 'Before we go on: what have we been talking about?'
+export const compacted = (summary, now) => ({ at: now, turns: [{ q: RECAP, a: summary }] })
+
+// One call, one answer, nothing written. Whether the summary is kept — and what
+// happens when this comes back empty — is decided by the caller, which is the
+// side that knows whether the slate was cleared while this was in flight.
+export async function summarize({ apiKey, baseUrl, model }, turns) {
+  const reply = await call({ apiKey, baseUrl }, {
+    model,
+    max_tokens: MAX_TOKENS,
+    messages: [
+      ...turns.flatMap(({ q, a }) => [
+        { role: 'user', content: q },
+        { role: 'assistant', content: a },
+      ]),
+      { role: 'user', content: CONDENSE },
+    ],
+  })
+  return textOf(reply.choices?.[0]?.message).slice(0, MAX_SUMMARY)
+}
+
 export async function ask({ apiKey, baseUrl, model, question, today, tools, history = [] }) {
   // Replayed as plain sentences. What the model actually said and did on those
   // turns — which days it read, in how many calls — is not carried: it can read

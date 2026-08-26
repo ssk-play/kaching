@@ -312,7 +312,22 @@
     "message": "/today · /week · /month 는 누계를 알려줍니다. /recount 는 Play 에서 다시 가져옵니다 — 전체 또는 날짜·월·연도. /adjust 는 직접 보정합니다."
   },
   "cmdHelpAsk": {
-    "message": "명령어가 아닌 말은 누계에 대한 질문으로 알아듣고 답합니다."
+    "message": "명령어가 아닌 말은 누계에 대한 질문으로 알아듣고 답합니다. /compact 는 지금까지의 대화를 요약본 하나로 줄입니다."
+  },
+  "cmdCompactEmpty": {
+    "message": "정리할 대화가 없습니다. 다음 질문은 어차피 처음부터입니다."
+  },
+  "cmdCompactDone": {
+    "message": "$1개 대화를 이렇게 남겼습니다:"
+  },
+  "cmdCompactDoneOne": {
+    "message": "직전 대화를 이렇게 남겼습니다:"
+  },
+  "cmdCompactDropped": {
+    "message": "요약하지 못해 $1개 대화를 그냥 잊었습니다. 다음 질문은 처음부터입니다."
+  },
+  "cmdCompactDroppedOne": {
+    "message": "요약하지 못해 직전 대화를 그냥 잊었습니다. 다음 질문은 처음부터입니다."
   },
   "totalDay": {
     "message": "$2건 · $1"
