@@ -312,7 +312,22 @@
     "message": "Send /today, /week or /month for a running total. /recount fetches from Play again — everything, or a day, a month or a year; /adjust corrects a day by hand."
   },
   "cmdHelpAsk": {
-    "message": "Anything else you type here is answered as a question about the totals."
+    "message": "Anything else you type here is answered as a question about the totals. /compact boils the conversation so far down to a recap."
+  },
+  "cmdCompactEmpty": {
+    "message": "Nothing to compact — the next question starts fresh either way."
+  },
+  "cmdCompactDone": {
+    "message": "Kept $1 turns as this:"
+  },
+  "cmdCompactDoneOne": {
+    "message": "Kept the last turn as this:"
+  },
+  "cmdCompactDropped": {
+    "message": "Could not write a recap, so the $1 turns were forgotten instead. The next question starts fresh."
+  },
+  "cmdCompactDroppedOne": {
+    "message": "Could not write a recap, so the last turn was forgotten instead. The next question starts fresh."
   },
   "totalDay": {
     "message": "$2 orders · $1"

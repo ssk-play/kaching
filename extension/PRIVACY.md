@@ -16,8 +16,8 @@ operator other than you.
 | Your Google Play Console session cookie (`SAPISID`) | To sign the request to Play's own orders endpoint, exactly as the Console page does | Never leaves your browser. It is used to compute a one-way hash sent to Google only. |
 | Order records from your Play Console (order ID, product, package name, buyer country, amount, timestamp, state) | To build the notification | Sent only to the Telegram bot **you** configured |
 | Your Telegram bot token and chat ID | To deliver the notification | Stored locally in the browser; sent only to `api.telegram.org` |
-| Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount` and `/adjust` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
-| Messages that are not one of those commands, and the daily totals needed to answer them — including how a day's takings split by the currency buyers paid in | To answer a question about the totals in plain words | **Only if you set an API key.** Sent to the API service you chose in the settings — OpenAI by default, or any OpenAI-compatible service you point it at — on your own key and your own bill. With no key set, no request is ever made and such messages are ignored entirely. That service's own privacy policy governs what it receives. |
+| Messages sent to your bot | To answer `/today`, `/week`, `/month`, `/recount`, `/adjust` and `/compact` | Read from `api.telegram.org` on a recurring check. Only messages from the chat you configured are acted on; anything else is discarded beyond the chat's name and ID, kept locally so **Find chat ID** still works. |
+| Messages that are not one of those commands, and the daily totals needed to answer them — including how a day's takings split by the currency buyers paid in. `/compact` sends the last few exchanges themselves, and nothing else | To answer a question about the totals in plain words, and to sum up a conversation on request | **Only if you set an API key.** Sent to the API service you chose in the settings — OpenAI by default, or any OpenAI-compatible service you point it at — on your own key and your own bill. With no key set, no request is ever made and such messages are ignored entirely. That service's own privacy policy governs what it receives. |
 | Your API key | To make that request | Stored locally in the browser; sent only to the API service you chose |
 
 ## What it does not do
@@ -26,8 +26,8 @@ operator other than you.
 - No data is sent to the developer of this extension.
 - Nothing is transmitted anywhere except Google (the request you would make by
   opening the Console yourself), the Telegram bot you chose, and — only if you
-  set an API key and only for messages that are not commands — the API service
-  you chose.
+  set an API key, and only for a question or a `/compact` of the questions
+  already asked — the API service you chose.
 - No data is sold, rented, or shared. No advertising.
 - Individual order records are not retained. What is kept locally is a rolling
   list of recently seen order IDs (so the same order is not announced twice and

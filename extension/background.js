@@ -13,7 +13,7 @@ import {
   resettle, startedAt, adjust, combine, UNKNOWN_CURRENCY,
   dayKey, monthKey, weekStart, dayOf, periodOf, DAY,
 } from './totals.js'
-import { ask, isQuestion, freshTurns, nextTurns } from './llm.js'
+import { ask, summarize, compacted, isQuestion, freshTurns, nextTurns } from './llm.js'
 import { tools as ledgerTools } from './ledger.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
@@ -373,10 +373,12 @@ async function waitForCommands(s) {
           ? // A fetch of its own, so an expired Console session says so here
             // rather than answering with a silent zero.
             await recount(s, arg).catch((err) => t('tgFailOther', String(err?.message ?? err)))
-          : cmd === '/start' || cmd === '/help'
-            ? help(s)
-            : null
-    // Anything that is not one of the five is not a malformed command, it is a
+          : cmd === '/compact'
+            ? await compact(s)
+            : cmd === '/start' || cmd === '/help'
+              ? help(s)
+              : null
+    // Anything that is none of the above is not a malformed command, it is a
     // sentence. Worked out after the chain rather than inside it because, alone
     // among the branches, what it answers is only worth remembering once the
     // reader has actually seen it.
@@ -863,7 +865,51 @@ async function answerQuestion(s, said) {
   }
 }
 
-// The five fixed commands are in the bot's own menu; what is not discoverable is
+// Replaces the remembered conversation with a recap of it, so the thread
+// survives at a fraction of what it was costing to carry.
+//
+// Not a cure for a context that grows: it cannot grow. Only the last
+// MAX_TURNS_KEPT turns are ever resent, and a gap of HISTORY_TTL_MS drops them
+// all, so a question has a ceiling on what it can cost whether or not anyone
+// runs this. What it earns is the room under that ceiling — four turns of full
+// answers replaced by a few lines means the next question carries the subject
+// without carrying the prose, and a conversation can go on past four turns
+// without the fifth losing the first.
+//
+// The recap is shown, not just kept. A summary the reader cannot see is one they
+// cannot correct, and the next answer is built on it.
+//
+// The count is of live turns rather than stored ones. A lapsed conversation has
+// nothing to compact, which is the truth — the model was never going to be shown
+// it.
+async function compact(s) {
+  const now = Date.now()
+  const epoch = resetEpoch
+  const { chatTurns } = await chrome.storage.local.get({ chatTurns: null })
+  const live = freshTurns(chatTurns, now)
+  if (!live.length) return t('cmdCompactEmpty')
+
+  // Writing a summary takes the same key as answering a question, so with no key
+  // — or with the call refused — there is nothing to compact the turns into.
+  // They are dropped rather than left: whoever typed this asked for a lighter
+  // conversation, and forgetting is the one way of getting there that cannot
+  // fail. Said plainly, because a thread the reader believes was summarised and
+  // was actually forgotten is a next question asked into a void.
+  const summary = s.aiKey
+    ? await summarize({ apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel }, live)
+        .catch(() => '')
+    : ''
+
+  // A reset mid-call means this conversation belongs to an account the user has
+  // just cleared; writing either outcome back would restore it.
+  if (epoch !== resetEpoch) return t('cmdCompactEmpty')
+  await chrome.storage.local.set({ chatTurns: summary ? compacted(summary, now) : null })
+  const one = live.length === 1
+  if (!summary) return t(one ? 'cmdCompactDroppedOne' : 'cmdCompactDropped', live.length)
+  return `${t(one ? 'cmdCompactDoneOne' : 'cmdCompactDone', live.length)}\n${summary}`
+}
+
+// The fixed commands are in the bot's own menu; what is not discoverable is
 // that a sentence works too, and only once a key makes it work.
 const help = (s) => (s.aiKey ? `${t('cmdHelp')} ${t('cmdHelpAsk')}` : t('cmdHelp'))
 

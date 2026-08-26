@@ -43,7 +43,8 @@ phone beyond Telegram itself.
 - Anything you type that is not a command is answered as a question about the
   totals — "how did last week go, day by day" — by reading the same tally.
   Optional, off until you enter your own API key, and read-only: it cannot
-  change a figure. Works with any OpenAI-compatible service — OpenAI by
+  change a figure. `/compact` sums the conversation up so far and carries on from
+  the recap. Works with any OpenAI-compatible service — OpenAI by
   default, or a cheaper provider, a gateway, or a model on your own machine
 
 **What you can control**

@@ -42,6 +42,7 @@ const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
+  summarize, compacted, RECAP,
 } = await load('llm.js')
 
 // One wide span rather than a window per glyph. Half the pictograms this
@@ -1321,6 +1322,39 @@ test('one clock for both ends of a call, so a live conversation cannot collapse'
   assert.equal(nextTurns(stored, now + 5_000, 'c', 'd').turns.length, 1)
 })
 
+test('compacting keeps the thread as a recap rather than dropping it', async () => {
+  const now = 1_800_000_000_000
+  const live = [
+    { q: '지난주 어땠어?', a: '8월 19일 12,000원, 20일 0원, 21일 45,500원입니다.' },
+    { q: '그럼 INR 은?', a: 'INR 로는 전체 4,600 KRW 입니다.' },
+  ]
+  const sent = stubApi([says('지난주 일별 수익(19일 12,000원 등)과 INR 전체 4,600 KRW 를 확인했다.')])
+  const summary = await summarize({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm' }, live)
+  assert.match(summary, /INR/)
+
+  // No tools offered. A model that went back to the ledger here would pay to
+  // re-read days in order to describe a conversation about them — and could
+  // contradict the answer the reader was actually given.
+  assert.equal('tools' in sent[0], false)
+  // The turns go up as themselves and the instruction comes last, so what is
+  // being summarised is the exchange rather than a description of one.
+  assert.deepEqual(sent[0].messages.slice(0, 4).map((m) => m.role), [
+    'user', 'assistant', 'user', 'assistant',
+  ])
+  assert.equal(sent[0].messages.at(-1).role, 'user')
+  assert.match(sent[0].messages.at(-1).content, /compacting/)
+
+  // Stored as an ordinary turn, so ask() replays it with no special case and a
+  // compacted conversation can be compacted again.
+  const kept = compacted(summary, now)
+  assert.equal(kept.at, now)
+  assert.deepEqual(freshTurns(kept, now), [{ q: RECAP, a: summary }])
+  // And the clock restarts with it: the thread is live for another window, not
+  // summarised into one that is already half spent.
+  assert.deepEqual(freshTurns(kept, now + HISTORY_TTL_MS + 1), [])
+  assert.equal(nextTurns(kept, now, 'c', 'd').turns.length, 2)
+})
+
 test('a pasted URL reaches the same endpoint with or without its trailing slash', () => {
   // Some gateways route a double slash and others answer it with a 404, and a
   // pasted URL is as likely to carry one as not.
@@ -1568,7 +1602,13 @@ test('a menu that gained a command reaches installs that already had one', () =>
   assert.notEqual(menuFingerprint({ en: one }), menuFingerprint({ en: [{ command: 'today', description: 'b' }] }))
   // And the shipped menu advertises every command the bot actually answers — a
   // command that exists only for whoever read the source is one nobody has.
-  const answered = ['today', 'week', 'month', 'recount', 'adjust', 'help', 'start']
+  const answered = ['today', 'week', 'month', 'recount', 'adjust', 'compact', 'help', 'start']
+  // Read off the dispatcher rather than trusted to this list alone. The list is
+  // written by hand and the menu is written by hand, so the two agreeing proves
+  // only that the same person typed both — /compact is advertised because the
+  // source answers "/compact", not because it appears twice in this file.
+  const dispatcher = fs.readFileSync(path.join(EXT, 'background.js'), 'utf8')
+  for (const cmd of answered) assert.ok(dispatcher.includes(`'/${cmd}'`), `unhandled: /${cmd}`)
   for (const list of Object.values(MENU)) {
     assert.deepEqual(list.map((c) => c.command).sort(), [...answered].sort())
   }
