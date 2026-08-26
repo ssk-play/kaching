@@ -72,13 +72,22 @@
     "message": "정산액이 이 값보다 작은 주문은 건너뜁니다. 1 로 두면 0원짜리 테스트 주문이 걸러집니다. 0 이면 전부 알립니다."
   },
   "lblShowLocal": {
-    "message": "내 시간대로 표시"
+    "message": "그 시간대로 시각 표시"
   },
   "lblShowUtc": {
     "message": "UTC 로 표시"
   },
   "hintTimes": {
-    "message": "Play 는 주문 시각을 UTC 로 기록하고, 하루 누계도 UTC 자정부터 UTC 자정까지입니다. 둘 다 켜면 내 시계를 나란히 볼 수 있습니다."
+    "message": "첫 줄은 위에서 고른 시간대, 즉 누계가 세는 기준입니다. 둘째 줄은 UTC 로, Play Console 이 쓰는 기준입니다 — 대조하신다면 켜 두세요."
+  },
+  "lblTimeZone": {
+    "message": "시간대"
+  },
+  "lblZoneAuto": {
+    "message": "이 브라우저 ($1)"
+  },
+  "hintTimeZone": {
+    "message": "주문이 어느 날짜로 잡히는지, /today 가 언제 리셋되는지, /recount 가 Play 에 어느 구간을 요청하는지를 정합니다. 이미 집계된 뒤에 바꾸면 초기화 후 /recount 를 해야 합니다 — 안 하면 옛 날짜가 옛 시간대로 남습니다."
   },
   "lblInterval": {
     "message": "확인 주기 (분)"

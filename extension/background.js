@@ -2,7 +2,7 @@ import {
   send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands, menuFingerprint,
 } from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
-import { load, isConfigured } from './settings.js'
+import { load, isConfigured, zoneOf } from './settings.js'
 import { plan } from './filters.js'
 import { describe, label, estimatedNet, isSettled, totalLine } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
@@ -11,7 +11,7 @@ import {
   MAX_DAYS as MAX_BUCKET_DAYS,
   remember as rememberCharge, amountFor, isEstimate, confirm as confirmCharge,
   resettle, startedAt, adjust, combine, UNKNOWN_CURRENCY,
-  dayKey, monthKey, weekStart, dayOf, periodOf, DAY,
+  dayKey, startOf, endOf, monthKey, weekStart, dayOf, periodOf, DAY,
 } from './totals.js'
 import { ask, summarize, compacted, isQuestion, freshTurns, nextTurns } from './llm.js'
 import { tools as ledgerTools } from './ledger.js'
@@ -89,7 +89,7 @@ async function putRight({ all, fx, seen, since, buckets, charged, epoch, setting
     ledger = confirmCharge(ledger, o.id, now.amount)
     const by = now.amount - was
     if (!by) continue
-    totals = resettle(totals, dayKey(o.at), o.net?.currency || UNKNOWN_CURRENCY, by)
+    totals = resettle(totals, dayKey(o.at, zoneOf(settings)), o.net?.currency || UNKNOWN_CURRENCY, by)
     moved += 1
     drift += by
   }
@@ -252,7 +252,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     testAi: async () => {
       const s = await load()
       if (!s.aiKey) throw new Error(t('msgNeedAiKey'))
-      const today = dayKey(Date.now())
+      const today = dayKey(Date.now(), zoneOf(s))
       // Whatever the page had in the box, then whatever was saved, then the
       // built-in probe. Someone chasing a wrong answer types the question that
       // produced it; someone who just wants to know the key works types nothing
@@ -344,7 +344,7 @@ async function waitForCommands(s) {
   await rememberChats(chatsIn(list))
 
   const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
-  const today = dayKey(Date.now())
+  const today = dayKey(Date.now(), zoneOf(s))
   // Only moves past what was actually dealt with. A reply lost to a 429 or a
   // dropped connection is left unacknowledged so the next poll tries again,
   // rather than being confirmed away unanswered and unlogged.
@@ -368,7 +368,7 @@ async function waitForCommands(s) {
     const reply = key
       ? totalLine(key, spanOf(totals, adjustments, key, today)) ?? t(key, '—', 0)
       : cmd === '/adjust'
-        ? await applyCorrection(arg)
+        ? await applyCorrection(arg, zoneOf(s))
         : cmd === '/recount'
           ? // A fetch of its own, so an expired Console session says so here
             // rather than answering with a silent zero.
@@ -449,8 +449,8 @@ const dayLine = (day, today, figures) =>
 // Written to its own store, never to the buckets. A poll in flight holds a copy of
 // those and writes it back after every send, which would take a correction
 // entered in the meantime straight back out.
-async function applyCorrection(arg) {
-  const today = dayKey(Date.now())
+async function applyCorrection(arg, zone) {
+  const today = dayKey(Date.now(), zone)
   const { totals, adjustments, payoutCurrency: paid } = await chrome.storage.local.get({
     totals: {}, adjustments: {}, payoutCurrency: null,
   })
@@ -502,7 +502,7 @@ const RECOUNT_MAX_CALLS = 80
 // A single day is where the halving stops. There is nothing left to narrow, so
 // that day is reported as short rather than retried forever — and named in the
 // reply, because the tally must not rewrite a day from part of it.
-async function ordersWithin(developerId, from, to, short, budget) {
+async function ordersWithin(developerId, zone, from, to, short, budget) {
   const span = daysBetween(from, to)
   let got = null
   if (budget.left <= 0) return []
@@ -510,8 +510,12 @@ async function ordersWithin(developerId, from, to, short, budget) {
   try {
     got = await fetchOrders({
       developerId,
-      from: Date.parse(`${from}T00:00:00Z`),
-      to: Date.parse(`${to}T00:00:00Z`) + 86_400_000,
+      // The zone's own midnights, not UTC's. Play is asked for absolute time
+      // and answers in it, so these two instants are what decide whether a day
+      // comes back whole — ask for UTC midnight and file by Seoul's, and the
+      // day is rebuilt from three quarters of itself.
+      from: startOf(from, zone),
+      to: endOf(to, zone),
       pageSize: RECOUNT_PAGE,
     })
   } catch (err) {
@@ -539,8 +543,8 @@ async function ordersWithin(developerId, from, to, short, budget) {
   // middle that no watermark can describe.
   const mid = shift(from, Math.floor(span / 2))
   return [
-    ...(await ordersWithin(developerId, mid, to, short, budget)),
-    ...(await ordersWithin(developerId, from, shift(mid, -1), short, budget)),
+    ...(await ordersWithin(developerId, zone, mid, to, short, budget)),
+    ...(await ordersWithin(developerId, zone, from, shift(mid, -1), short, budget)),
   ]
 }
 
@@ -550,14 +554,14 @@ async function ordersWithin(developerId, from, to, short, budget) {
 // leaves exactly as it was.
 //
 // Windows are disjoint by day, so no order is counted from two of them.
-async function ordersOver(developerId, from, to, short, reached) {
+async function ordersOver(developerId, zone, from, to, short, reached) {
   const out = []
   const budget = { left: RECOUNT_MAX_CALLS, window: 0, oldest: null }
   let width = RECOUNT_WINDOW_DAYS
   for (let end = to; end >= from && budget.left > 0; ) {
     const back = shift(end, -(width - 1))
     const start = back < from ? from : back
-    out.push(...(await ordersWithin(developerId, start, end, short, budget)))
+    out.push(...(await ordersWithin(developerId, zone, start, end, short, budget)))
     if (budget.window) width = budget.window
     end = shift(start, -1)
   }
@@ -594,7 +598,8 @@ const backTo = (day, today) =>
 const widestSpan = (today) => shift(today, -(RECOUNT_MAX_DAYS - 2))
 
 async function recount(s, arg) {
-  const today = dayKey(Date.now())
+  const zone = zoneOf(s)
+  const today = dayKey(Date.now(), zone)
   const asked = periodOf(arg, today)
   if (!asked) return t('cmdRecountUsage', RECOUNT_MAX_DAYS)
   const from = asked.all ? widestSpan(today) : asked.from
@@ -610,7 +615,7 @@ async function recount(s, arg) {
   const short = []
   // Filled in by the walk: how far back it actually got.
   const reached = {}
-  const all = await ordersOver(s.developerId, from, to, short, reached)
+  const all = await ordersOver(s.developerId, zone, from, to, short, reached)
   const fx = await exchange(all, epoch)
   const st = await state()
   const announced = new Set([...st.seen, ...st.delivered])
@@ -628,7 +633,7 @@ async function recount(s, arg) {
   let first = null
   for (const o of all) {
     if (!TERMINAL_STATES.has(o.state)) continue
-    const day = dayKey(o.at)
+    const day = dayKey(o.at, zone)
     if (day < from || day > to || partial.has(day)) continue
 
     const paid = estimatedNet(o, fx)
@@ -662,7 +667,7 @@ async function recount(s, arg) {
   }
   const figures = sumRange(buckets, from, to)
   const moved = await restate(rebuilt, epoch, {
-    banked, first, counted: all, currency: fx.currency, partial, from, to,
+    banked, first, counted: all, currency: fx.currency, partial, from, to, zone,
   })
   await record('info', 'logRecount', from === to ? from : `${from}…${to}`, moved.note)
 
@@ -774,7 +779,7 @@ async function rewrite(found, rebuild) {
 // wrote. That does mean an order from the last few minutes can be counted here
 // and never announced — the money is right and the notification is the thing
 // given up, which is the trade an explicit "make it match Play" is worth.
-async function rebank({ banked, first, counted, currency, partial, from, to }) {
+async function rebank({ banked, first, counted, currency, partial, from, to, zone }) {
   const { counted: ledger, countedSince, seen, delivered } = await chrome.storage.local.get({
     counted: [], countedSince: 0, seen: [], delivered: [],
   })
@@ -789,7 +794,7 @@ async function rebank({ banked, first, counted, currency, partial, from, to }) {
   const known = new Set([...seen, ...delivered])
   for (const o of counted) {
     if (!TERMINAL_STATES.has(o.state)) continue
-    const day = dayKey(o.at)
+    const day = dayKey(o.at, zone)
     if (day < from || day > to || partial.has(day)) continue
     known.add(keyFor(o))
   }
@@ -834,7 +839,7 @@ async function answerQuestion(s, said) {
   // be judged lapsed by the time the answer came back, and collapse to nothing
   // while the reader was mid-sentence.
   const now = Date.now()
-  const today = dayKey(now)
+  const today = dayKey(now, zoneOf(s))
   const epoch = resetEpoch
   // Stored as the two sentences rather than as the model's own message list: the
   // tool_use blocks in that list mean nothing without the results that answered
@@ -983,6 +988,7 @@ async function runPoll() {
 }
 
 async function onSuccess(s, all) {
+  const zone = zoneOf(s)
   const st = await state()
   const terminal = all.filter((o) => TERMINAL_STATES.has(o.state))
   // `delivered` is the journal of a run that ended before it could fold its
@@ -1121,7 +1127,7 @@ async function onSuccess(s, all) {
       charged = rememberCharge(charged, o.id, { ...net, estimated: !isSettled(o) })
     }
     buckets = trimTotals(
-      tally(buckets, dayKey(o.at), {
+      tally(buckets, dayKey(o.at, zone), {
         net, refund, currency: fx.currency,
         // The currency the buyer actually paid in, which is the one a question
         // about a country's sales is really about. Read off the order even for a
@@ -1135,7 +1141,7 @@ async function onSuccess(s, all) {
     for (const o of batch) {
       count(o)
       const footer = s.showDailyTotal
-        ? totalLine('totalToday', spanOf(buckets, corrections, 'totalToday', dayKey(Date.now())))
+        ? totalLine('totalToday', spanOf(buckets, corrections, 'totalToday', dayKey(Date.now(), zone)))
         : null
       const text = [describe(o, s, fx), footer].filter(Boolean).join('\n')
       await sendTelegram(s.botToken, s.chatId, text)

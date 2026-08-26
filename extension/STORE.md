@@ -33,8 +33,9 @@ phone beyond Telegram itself.
   and it says so on the line; afterwards it is Play's own figure in yours. An
   optional line shows the breakdown
 - Order ID
-- Time in your local zone, in UTC, or both. Daily totals run UTC midnight to
-  UTC midnight, the same day Play files the order under
+- One time zone decides which day an order counts under and when the daily
+  total resets — your browser's by default, or any zone you pick. Order times
+  print in that zone, in UTC, or both
 - What the day has brought in so far, as a footer. Send the bot `/today`,
   `/week` or `/month` at any point — they sit in the bot's command menu — and it
   answers within seconds

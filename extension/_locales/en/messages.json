@@ -72,13 +72,22 @@
     "message": "Skip orders paying out less than this. Set 1 to hide zero-value test orders. 0 notifies everything."
   },
   "lblShowLocal": {
-    "message": "Show time in your local zone"
+    "message": "Show the time in that zone"
   },
   "lblShowUtc": {
     "message": "Show time in UTC"
   },
   "hintTimes": {
-    "message": "Play records order times in UTC, and a day's total runs from UTC midnight to UTC midnight. Turn both on to see your own clock beside it."
+    "message": "The first line is the zone above, the one the totals count in. The second is UTC, which is what the Play Console reports — keep it on if you reconcile against it."
+  },
+  "lblTimeZone": {
+    "message": "Time zone"
+  },
+  "lblZoneAuto": {
+    "message": "This browser's ($1)"
+  },
+  "hintTimeZone": {
+    "message": "Decides which day an order counts under, when /today starts over, and which days /recount asks Play for. Changing it after orders are counted needs a Reset and a /recount, or old days stay filed under the old zone."
   },
   "lblInterval": {
     "message": "Check every (minutes)"
