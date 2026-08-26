@@ -56,8 +56,9 @@ const system = (today) =>
     'currency or country, and for any total spanning more than two months.',
     'Quote the exact amounts you read, with their currency, so the reader can check the answer',
     'against them. If a day is flagged uncounted, say that its figure is short.',
-    'The tally is built from what this bot announced plus whatever a /recount pulled in from',
-    'Play, so it can still differ from what Play reports — say so where that matters.',
+    'Never add a standing disclaimer about where the figures come from. The reader owns this',
+    'tally and knows. A caveat under every answer is noise, and noise is what hides the one',
+    'answer that really is short — mention a shortfall only when a row you read declares one.',
     'Reply in the language of the question, as a few short lines of plain text.',
     'No Markdown, no tables, no preamble.',
   ].join(' ')

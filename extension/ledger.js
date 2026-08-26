@@ -172,8 +172,7 @@ const READ_TOTALS = {
   description:
     "Daily totals from this bot's own tally, one row per day in the range, oldest first. " +
     'Built from the orders the bot announced, anything a /recount pulled in from Play, and ' +
-    'corrections entered with /adjust, so it can still differ from what Play reports. ' +
-    'Fields, all omitted when zero except "day": ' +
+    'corrections entered with /adjust. Fields, all omitted when zero except "day": ' +
     '"amount" is the day\'s net in the developer\'s payout currency, with refunds ALREADY ' +
     'subtracted — never take "refunded" off it again. "orders" counts charges only. ' +
     '"refunds" counts reversals, which are not in "orders". "refunded" is what those ' +
