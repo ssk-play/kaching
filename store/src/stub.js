@@ -18,7 +18,7 @@ const SAMPLE = {
   notifyRefunded: true,
   packages: '',
   minPayout: 1,
-  showLocalTime: true,
+  showLocalTime: false,
   showUtcTime: true,
   intervalMinutes: 10,
   days: 2,

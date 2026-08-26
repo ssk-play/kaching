@@ -19,7 +19,12 @@ export const DEFAULTS = {
   minPayout: 0,
 
   // message format
-  showLocalTime: true,
+  // UTC alone by default. Two clocks under every order is a line and a half of
+  // the message spent on the same instant twice, and UTC is the one that can be
+  // compared against what the Console shows and against somebody else's report.
+  // Both are still switches: a developer who only ever thinks in their own zone
+  // turns this pair around and gets one line either way.
+  showLocalTime: false,
   showUtcTime: true,
   showBreakdown: false,
   showDailyTotal: true,

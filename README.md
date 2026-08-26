@@ -17,16 +17,30 @@ long poll open on Telegram, so a command is usually waited for rather than
 looked for.
 
 The tally is written one message at a time, so two commands exist for the day you
-notice it is wrong. `/recount` works a day out again from Play and **writes the
-result back**, so `/today` changes with it. `/adjust` patches a day by hand
-instead:
+notice it is wrong. `/recount` fetches from Play again and **writes the result
+back**, so `/today` changes with it. `/adjust` patches a day by hand instead:
 
 ```
-/recount                      set today to what Play says it was
-/recount 2026-08-20           an earlier day
+/recount                      everything Play still has
+/recount today                just today
+/recount 20                   the 20th of this month
+/recount 2026-08              a whole month
 /adjust -6500                 today, down by 6,500
 /adjust +5000                 today, up by 5,000
 /adjust 2026-08-20 -6500      an earlier day
+```
+
+An order reads as five lines — what kind of sale, what sold and from which app,
+for how much and where, when, and which order — with the day's running total
+under it:
+
+```
+구독 4회차
+com.example.app, premium_unlock(프리미엄 잠금해제)
+IN, INR 399 → KRW 4,600 예상 순수익
+2026-08-23 02:01 UTC
+GPA.1111-2222-3333-44444..2
+오늘 11건 · KRW 56,671 · 환불 2건 KRW -9,100
 ```
 
 ## Asking in plain words
@@ -94,7 +108,7 @@ with it — until a `/recount` of that day supersedes them.
 | New orders / refunds | both on | Which events to announce |
 | Only these apps | all | Package names |
 | Minimum payout | 0 | Set 1 to hide zero-value test orders |
-| Local time / UTC | both on | |
+| Local time / UTC | UTC only | Turn on local time to get both, one per zone |
 | Tax and fee breakdown | off | Adds a line so the estimated net figure can be checked |
 | Day's running total | on | Footer on every order message — the bot commands work either way |
 | API key | — | Optional; lets the bot answer anything that is not a command |

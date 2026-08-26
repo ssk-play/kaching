@@ -1163,7 +1163,18 @@ async function onFailure(s, reason) {
       : reason.startsWith(DELIVERY_PREFIX)
         ? t('tgFailDelivery', reason.slice(DELIVERY_PREFIX.length))
         : t('tgFailOther', reason)
-    const text = `⚠️ ${t('tgFailHeader')}\n${detail}\n${t('tgFailCount', fails)}`
+    // The header carries no mark any more, so it has to carry the words. It used
+    // to open with a warning sign and the product's own name; stripped of the
+    // sign that left an outage announcing itself as "Kaching", indistinguishable
+    // at a glance from the order messages around it in a busy chat — and an
+    // alert scrolled past reads as a quiet sales day, which is the one thing
+    // this path exists to prevent.
+    //
+    // It says something is broken, not which half: two of the three callers pass
+    // delivery(), where Play was read perfectly well and only the send failed.
+    // A header naming the read would send that reader to re-authenticate a
+    // session that was never the problem.
+    const text = `${t('tgFailHeader')}\n${detail}\n${t('tgFailCount', fails)}`
     const landed = await sendTelegram(s.botToken, s.chatId, label(s, text)).then(
       () => true,
       () => false,
@@ -1183,7 +1194,7 @@ async function onFailure(s, reason) {
 async function report(outcome) {
   const s = await load()
   if (!s.verbose || !s.botToken || !s.chatId) return
-  await sendTelegram(s.botToken, s.chatId, label(s, `⏱ ${stamp()}\n${JSON.stringify(outcome)}`)).catch(
+  await sendTelegram(s.botToken, s.chatId, label(s, `${stamp()}\n${JSON.stringify(outcome)}`)).catch(
     () => {},
   )
 }

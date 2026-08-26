@@ -44,6 +44,63 @@ const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
 } = await load('llm.js')
 
+// One wide span rather than a window per glyph. Half the pictograms this
+// codebase carried were in the emoji planes ("🔔" U+1F514, "🔁" U+1F501) and half
+// were far below them ("⏱" U+23F1, "⚠" U+26A0, "↩" U+21A9), so a class assembled
+// from the ones somebody remembered has a hole for the ones they did not: "ℹ" is
+// U+2139, "‼" U+203C, "⤴" U+2934.
+//
+// The bare forms are the point. "↩️" carries a trailing variation selector and
+// matches on that alone, so a class that misses U+21A9 still passes every test
+// written with the emoji-keyboard form while letting through the plain
+// code-point form — which is exactly how "⏱" reached the failure alert.
+//
+// "→" is punctuation inside the span, so it is taken out by name. Starting the
+// span above it instead is what left the hole in the first place.
+//
+// U+203C and U+2049 are named one by one because they are the only two emoji
+// below U+2100; extending the span down to reach them would swallow the em
+// dash, the ellipsis and the quotation marks these messages legitimately use.
+const pictogram = (text) =>
+  /[\u{203C}\u{2049}\u{2100}-\u{2BFF}\u{1F000}-\u{1FAFF}\u{FE0F}]/u.test(
+    text.replaceAll('→', ''),
+  )
+
+test('the pictogram guard can see the characters it was written about', () => {
+  // A guard that would not have caught them proves nothing, so it is checked
+  // against the four this codebase actually carried — each in the bare form, not
+  // only the variation-selector form that matches for the wrong reason.
+  for (const glyph of ['↩', '↩️', '⚠', '⚠️', '⏱', '🔔', '🔁', 'ℹ', '‼', '⤴', '™']) {
+    assert.equal(pictogram(glyph), true, glyph)
+  }
+  // And it does not fire on the punctuation the reports legitimately carry.
+  // And not on the punctuation these messages legitimately carry, which is why
+  // the span stops short of it and picks up its two exceptions by name.
+  for (const plain of [
+    'KR, USD 4.99 → KRW 6,500 est. net',
+    'Today 2 orders · KRW 8,000',
+    '오늘 11건 · KRW 56,671',
+    'a — b … c "d" ₩1,000 ¥100',
+  ]) {
+    assert.equal(pictogram(plain), false, plain)
+  }
+})
+
+test('no message the bot can send carries a pictogram', () => {
+  // describe() is not the only report. The failure alert and the verbose status
+  // line go to the same chat through the same sender, and both carried one until
+  // this change — so the catalogue itself is what gets checked, in both
+  // languages, rather than the one function whose output is easy to reach.
+  for (const [locale, file] of [['en', 'en'], ['ko', 'ko']]) {
+    const catalogue = JSON.parse(
+      fs.readFileSync(path.join(EXT, `_locales/${file}/messages.json`), 'utf8'),
+    )
+    for (const [key, entry] of Object.entries(catalogue)) {
+      assert.equal(pictogram(entry.message), false, `${locale}/${key}: ${entry.message}`)
+    }
+  }
+})
+
 const order = (over = {}) => ({
   id: 'GPA.1111-2222-3333-44444',
   state: 'charged',
@@ -137,16 +194,34 @@ test('time toggles select zones independently', () => {
   assert.equal(times(at, { showLocalTime: false, showUtcTime: false }), '')
 })
 
-test('describe omits the sender label when it is blank', () => {
-  const bare = describe(order(), { ...DEFAULTS, senderName: '' })
-  assert.ok(bare.startsWith('🔔 New order'), bare)
-  const tagged = describe(order(), { ...DEFAULTS, senderName: 'shop' })
-  assert.ok(tagged.startsWith('[shop] 🔔 New order'), tagged)
+test('an order reads as five lines, each answering one question', () => {
+  // What kind of sale, what sold and from which app, for how much and where,
+  // when, and which order. Pinned whole because the value of the shape is that
+  // it is the same shape every time — a reader scanning a month of these is
+  // reading down a column, not across a sentence.
+  assert.deepEqual(describe(order(), { ...DEFAULTS, senderName: '' }).split('\n'), [
+    'Purchase',
+    'com.example.app, premium_unlock(Premium)',
+    'KR, USD 4.99 → KRW 6,500 est. net',
+    '2026-08-18 23:40 UTC',
+    'GPA.1111-2222-3333-44444',
+  ])
 })
 
-test('describe distinguishes refunds and subscriptions', () => {
-  assert.ok(describe(order({ state: 'refunded' }), DEFAULTS).startsWith('↩️ Refund'))
-  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('🔔 New subscription'))
+test('describe omits the sender label when it is blank', () => {
+  const bare = describe(order(), { ...DEFAULTS, senderName: '' })
+  assert.ok(bare.startsWith('Purchase'), bare)
+  const tagged = describe(order(), { ...DEFAULTS, senderName: 'shop' })
+  assert.ok(tagged.startsWith('[shop] Purchase'), tagged)
+})
+
+test('describe distinguishes refunds and subscriptions, without pictograms', () => {
+  // A line of chat that leads with an emoji reads as an advertisement, and this
+  // one is a record.
+  assert.ok(describe(order({ state: 'refunded' }), DEFAULTS).startsWith('Refund'))
+  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('Subscription'))
+  assert.equal(pictogram(describe(order(), DEFAULTS)), false)
+  assert.equal(pictogram(describe(order({ state: 'refunded' }), DEFAULTS)), false)
 })
 
 test('describe drops empty lines rather than printing blanks', () => {
@@ -155,7 +230,13 @@ test('describe drops empty lines rather than printing blanks', () => {
     { ...DEFAULTS, showLocalTime: false, showUtcTime: false },
   )
   assert.ok(!sparse.includes('\n\n'), sparse)
-  assert.deepEqual(sparse.split('\n'), ['🔔 New order', 'Premium · premium_unlock', 'com.example.app', order().id])
+  // No country and no figures, so the third line has nothing to say and goes
+  // rather than printing a bare comma.
+  assert.deepEqual(sparse.split('\n'), [
+    'Purchase',
+    'com.example.app, premium_unlock(Premium)',
+    order().id,
+  ])
 })
 
 test('clampNumber falls back for blank input instead of clamping to the minimum', () => {
@@ -322,12 +403,12 @@ test('a subscription renewal is not announced as a new subscription', () => {
   assert.equal(cycleOf(order({ id: 'GPA.1111-2222-3333-44444..0' })), null)
 
   const renewal = describe(order({ subscription: true, id: 'GPA.1111-2222-3333-44444..2' }), DEFAULTS)
-  assert.ok(renewal.startsWith('🔁 Subscription renewal · charge #4'), renewal)
-  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('🔔 New subscription'))
+  assert.ok(renewal.startsWith('Subscription · charge #4'), renewal)
+  assert.ok(describe(order({ subscription: true }), DEFAULTS).startsWith('Subscription\n'))
   // A refund stays a refund whatever charge it undoes.
   assert.ok(
     describe(order({ subscription: true, state: 'refunded', id: 'GPA.1..0' }), DEFAULTS)
-      .startsWith('↩️ Refund'),
+      .startsWith('Refund'),
   )
 })
 
@@ -467,13 +548,17 @@ test('an estimate is rounded to the currency it is quoted in', () => {
   })
 })
 
-test('the product ID rides along with the display name', () => {
+test('the product ID leads and the display name follows it', () => {
   // The name is editable in the Console; the ID is what every API and every
-  // line of the developer's own code keys on.
-  assert.ok(describe(order(), DEFAULTS).includes('Premium · premium_unlock'))
+  // line of the developer's own code keys on — so the ID is what the line can
+  // still be found by after someone renames the product.
+  const line = (o) => describe(order(o), DEFAULTS).split('\n')[1]
+  assert.equal(line(), 'com.example.app, premium_unlock(Premium)')
   // Nothing to add is not the same as something to repeat.
-  assert.ok(describe(order({ sku: 'Premium' }), DEFAULTS).includes('\nPremium\n'))
-  assert.ok(describe(order({ sku: '' }), DEFAULTS).includes('\nPremium\n'))
+  assert.equal(line({ sku: 'Premium' }), 'com.example.app, Premium')
+  assert.equal(line({ sku: '' }), 'com.example.app, Premium')
+  assert.equal(line({ product: '' }), 'com.example.app, premium_unlock')
+  assert.equal(line({ sku: '', product: '' }), 'com.example.app')
 })
 
 test('the exchange rate is read off orders Play has already settled', () => {
@@ -716,8 +801,8 @@ test('one formatter draws both the footer and the /today answer', () => {
   // volunteers under an order cannot disagree with the one it reports when
   // asked. Only the leading word differs.
   const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 1, uncounted: 0 }
-  assert.equal(totalLine('totalToday', totals), 'Today KRW 8,000 · 2 orders · 1 refund')
-  assert.equal(totalLine('totalMonth', totals), 'This month KRW 8,000 · 2 orders · 1 refund')
+  assert.equal(totalLine('totalToday', totals), 'Today 2 orders · KRW 8,000 · 1 refund')
+  assert.equal(totalLine('totalMonth', totals), 'This month 2 orders · KRW 8,000 · 1 refund')
   assert.equal(
     totalLine('totalToday', totals).replace('Today', ''),
     totalLine('totalMonth', totals).replace('This month', ''),
@@ -728,7 +813,7 @@ test('one formatter draws both the footer and the /today answer', () => {
   // Unless a correction put an amount there with nothing announced behind it.
   assert.equal(
     totalLine('totalDay', { currency: 'KRW', amount: -6500, orders: 0, refunds: 0, uncounted: 0 }),
-    'KRW -6,500 · 0 orders',
+    '0 orders · KRW -6,500',
   )
   assert.equal(totalLine('totalToday', null), null)
   assert.ok(totalLine('totalToday', { ...totals, uncounted: 2 }).endsWith('2 not in the total'))
@@ -742,16 +827,15 @@ test('English counts read right at one, not "1 orders"', () => {
   // own cannot tell a test purchase from the month's biggest sale.
   assert.equal(
     totalLine('totalToday', { ...one, refunded: -6500 }),
-    'Today KRW 5,020 · 1 order · 1 refund, KRW -6,500',
+    'Today 1 order · KRW 5,020 · 1 refund, KRW -6,500',
   )
   assert.equal(
     totalLine('totalToday', { ...one, refunds: 2, refunded: -11520 }),
-    'Today KRW 5,020 · 1 order · 2 refunds, KRW -11,520',
+    'Today 1 order · KRW 5,020 · 2 refunds, KRW -11,520',
   )
   // A bucket written before the field existed still reads, without an amount.
-  assert.equal(totalLine('totalToday', one), 'Today KRW 5,020 · 1 order · 1 refund')
-  assert.equal(totalLine('totalToday', one), 'Today KRW 5,020 · 1 order · 1 refund')
-  assert.equal(totalLine('totalMonth', one), 'This month KRW 5,020 · 1 order · 1 refund')
+  assert.equal(totalLine('totalToday', one), 'Today 1 order · KRW 5,020 · 1 refund')
+  assert.equal(totalLine('totalMonth', one), 'This month 1 order · KRW 5,020 · 1 refund')
 })
 
 test('a rate below 1 is disclosed as a number, not as zero', () => {
@@ -832,8 +916,8 @@ test('the week total spans a month boundary the month total cannot', () => {
 
 test('the week reads the same sentence as the day and the month', () => {
   const totals = { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, uncounted: 0 }
-  assert.equal(totalLine('totalWeek', totals), 'This week KRW 8,000 · 2 orders')
-  assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week KRW 8,000 · 1 order')
+  assert.equal(totalLine('totalWeek', totals), 'This week 2 orders · KRW 8,000')
+  assert.equal(totalLine('totalWeek', { ...totals, orders: 1 }), 'This week 1 order · KRW 8,000')
 })
 
 // ------------------------------------------- questions asked in plain words
