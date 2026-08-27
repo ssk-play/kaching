@@ -40,7 +40,7 @@ const T = await load('totals.js')
 const { chatsIn, menuFingerprint, MENU } = await load('telegram.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
-const { rangeOf, byCurrency, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
+const { rangeOf, byCurrency, byKind, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
   summarize, compacted, RECAP,
@@ -819,6 +819,9 @@ test('totals sum a day and a month from the same buckets', () => {
   assert.deepEqual(T.sum(b, '2026-08-19'), {
     currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0,
     currencies: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
+    // The same money dealt a second way. No kind was handed in either, so both
+    // splits file under the unknown key and both still add up to the day.
+    kinds: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
   })
   // Same function answers the month, so the two figures cannot drift apart.
   assert.equal(T.sum(b, '2026-08').amount, 9000)
@@ -833,6 +836,7 @@ test('a total never quietly absorbs money it could not convert', () => {
   assert.deepEqual(T.sum(b, '2026-08-19'), {
     currency: 'KRW', amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1,
     currencies: { NOK: { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
+    kinds: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
   })
   // A refund with no charge to take back out is left out of the amount the same
   // way, and disclosed the same way: the message above it printed a figure, so
@@ -843,6 +847,7 @@ test('a total never quietly absorbs money it could not convert', () => {
   assert.deepEqual(T.sum(b, '2026-08-19'), {
     currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2,
     currencies: { NOK: { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
+    kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
   })
 })
 
@@ -854,6 +859,7 @@ test('a refund comes back out of the running total', () => {
   assert.deepEqual(T.sum(b, '2026-08-19'), {
     currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0,
     currencies: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
+    kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
   })
 })
 
@@ -904,13 +910,15 @@ test('a correction moves the amount and leaves the counts alone', () => {
   const down = T.adjust({}, '2026-08-19', { currency: 'KRW', amount: -6500 })
   // A correction belongs to no buyer, so it adds nothing to the split.
   assert.deepEqual(T.sum(down, '2026-08-19'), {
-    currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0, currencies: {},
+    currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
+    currencies: {}, kinds: {},
   })
   // Both directions, and read together with what was announced.
   const up = T.adjust(down, '2026-08-19', { currency: 'KRW', amount: 500 })
   const both = T.combine(T.sum(day, '2026-08-19'), T.sum(up, '2026-08-19'))
   assert.deepEqual(both, {
-    currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0, currencies: {},
+    currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0,
+    currencies: {}, kinds: {},
   })
   // A correction in another currency is refused rather than added across.
   assert.equal(T.adjust(up, '2026-08-19', { currency: 'USD', amount: 5 }), null)
@@ -1651,16 +1659,73 @@ test('an order whose buyer currency Play did not report is filed, not dropped', 
   assert.equal(out.daysNotSplit, undefined)
 })
 
-test('the model is offered the currency split alongside the daily read', () => {
-  const specs = ledgerTools('2026-08-25').map((x) => x.spec.name)
-  assert.deepEqual(specs, ['read_totals', 'read_by_currency'])
-  const spec = ledgerTools('2026-08-25')[1].spec
-  // Both ends optional, or an all-time question costs a turn spent asking when
-  // the tally began.
-  assert.deepEqual(spec.parameters.required, [])
-  // The amounts are in the developer's currency, not the row's. A model that
-  // reads the row label as the unit reports INR sales in rupees.
-  assert.match(spec.description, /payoutCurrency/)
+test('how many renewals, and what they were worth, is one read', () => {
+  // The question this split exists for. Answered from the same figures the daily
+  // totals are made of, so a renewal's revenue and the days it came out of can
+  // never disagree — and answerable over a month without a row per day.
+  const sale = (kind, amount, from, refund = false) => ({
+    net: { currency: 'KRW', amount: refund ? -amount : amount },
+    currency: 'KRW', from, kind, refund,
+  })
+  let b = T.record({}, '2026-08-02', sale(T.KIND_RENEWAL, 4600, 'INR'))
+  b = T.record(b, '2026-08-02', sale(T.KIND_SUB, 17800, 'CAD'))
+  b = T.record(b, '2026-08-19', sale(T.KIND_RENEWAL, 4600, 'INR'))
+  b = T.record(b, '2026-08-19', sale(T.KIND_BUY, 5020, 'USD'))
+  // A renewal handed back. It stays in the renewal row, because that is where
+  // the money it is taking out went in.
+  b = T.record(b, '2026-08-20', sale(T.KIND_RENEWAL, 4600, 'INR', true))
+
+  const out = byKind(b, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28')
+  assert.deepEqual(out.kinds, [
+    { kind: 'sub', amount: 17800, orders: 1 },
+    { kind: 'buy', amount: 5020, orders: 1 },
+    // Two charges and one reversal: the count is the charges, the amount already
+    // has the reversal out of it.
+    { kind: 'renewal', amount: 4600, orders: 2, refunds: 1, refunded: -4600 },
+  ])
+  // Biggest first, and the whole split still adds back up to the days it came
+  // from — which is the property that makes quoting one row honest.
+  assert.equal(
+    out.kinds.reduce((n, k) => n + k.amount, 0),
+    T.sumRange(b, '2026-08-01', '2026-08-31').amount,
+  )
+  // Both splits are the same money dealt two ways, so they agree on the total.
+  const money = byCurrency(b, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28')
+  assert.equal(
+    money.currencies.reduce((n, c) => n + c.amount, 0),
+    out.kinds.reduce((n, k) => n + k.amount, 0),
+  )
+
+  // A day written before the split existed is money in the daily totals and in
+  // none of the rows. Saying so is what keeps a quoted row from reading as a
+  // kind that sold nothing rather than one this cannot account for.
+  const older = { ...b, '2026-08-05': { currency: 'KRW', amount: 9000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } }
+  const gap = byKind(older, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28')
+  assert.equal(gap.daysNotSplit, 1)
+  assert.match(gap.note, /recount/)
+  // And the currency split reports the same day as its own gap, not this one's.
+  assert.equal(byCurrency(older, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28').daysNotSplit, 1)
+})
+
+test('the model is offered both splits alongside the daily read', () => {
+  const tools = ledgerTools('2026-08-25')
+  assert.deepEqual(tools.map((x) => x.spec.name), ['read_totals', 'read_by_currency', 'read_by_kind'])
+  for (const { spec } of tools.slice(1)) {
+    // Both ends optional, or an all-time question costs a turn spent asking when
+    // the tally began.
+    assert.deepEqual(spec.parameters.required, [], spec.name)
+    // The amounts are in the developer's currency, not the row's. A model that
+    // reads the row label as the unit reports INR sales in rupees.
+    assert.match(spec.description, /payoutCurrency/)
+  }
+  // The kinds are named in the description, because "renewal" is only the right
+  // row to read if the model knows that is what the string will be.
+  const kinds = tools[2].spec.description
+  for (const kind of ['renewal', 'sub', 'buy']) assert.match(kinds, new RegExp(`"${kind}"`))
+  // And that a renewal's "orders" is the count being asked for. Told only that
+  // it counts charges, a model asked "how many renewals" reaches for read_totals
+  // and adds up days.
+  assert.match(kinds, /number of renewals/)
 })
 
 
@@ -1782,7 +1847,7 @@ test('a figure Play settles later moves the day without counting the order again
   const before = T.sum(buckets, '2026-08-23')
   assert.equal(before.amount, 340)
 
-  buckets = T.resettle(buckets, '2026-08-23', 'KRW', 2500 - 340)
+  buckets = T.resettle(buckets, '2026-08-23', { currency: 'KRW' }, 2500 - 340)
   const after = T.sum(buckets, '2026-08-23')
   assert.equal(after.amount, 2500)
   // One order, still. Nothing new happened; the same order turned out to be
@@ -1810,7 +1875,7 @@ test('a settlement keeps the split adding up, or leaves it visibly absent', () =
   // A day that has a split but no row for this currency gets one, or moving the
   // amount and not the split would have the two disagree.
   let split = T.record({}, '2026-08-23', { net: { currency: 'KRW', amount: 900 }, currency: 'KRW', from: 'USD' })
-  split = T.resettle(split, '2026-08-23', 'JPY', 2160)
+  split = T.resettle(split, '2026-08-23', { currency: 'JPY' }, 2160)
   const both = T.sum(split, '2026-08-23')
   assert.equal(both.amount, 3060)
   assert.equal(Object.values(both.currencies).reduce((n, c) => n + c.amount, 0), both.amount)
@@ -1822,7 +1887,7 @@ test('a settlement keeps the split adding up, or leaves it visibly absent', () =
   // stop being reported as unsplit while still being short by everything else.
   // A gap that says it is a gap beats one that has been papered over.
   const before = { '2026-08-23': { currency: 'KRW', amount: 340, orders: 1, refunds: 0, refunded: 0, uncounted: 0 } }
-  const put = T.resettle(before, '2026-08-23', 'KRW', 2160)
+  const put = T.resettle(before, '2026-08-23', { currency: 'KRW' }, 2160)
   assert.equal(T.sum(put, '2026-08-23').amount, 2500)
   assert.equal(T.hasBreakdown(put['2026-08-23']), false)
 })
@@ -1830,11 +1895,11 @@ test('a settlement keeps the split adding up, or leaves it visibly absent', () =
 test('a day the bucket window has dropped is not resurrected by a settlement', () => {
   // Putting it back would stand a single order up as if it were the whole day's
   // takings, on a day the tally has already stopped answering for.
-  assert.deepEqual(T.resettle({}, '2024-01-01', 'KRW', 2160), {})
+  assert.deepEqual(T.resettle({}, '2024-01-01', { currency: 'KRW' }, 2160), {})
   // And a settlement that moved nothing leaves the object identical, so the
   // caller can tell "nothing happened" from "something did".
   const one = T.record({}, '2026-08-23', { net: { currency: 'KRW', amount: 340 }, currency: 'KRW' })
-  assert.equal(T.resettle(one, '2026-08-23', 'KRW', 0), one)
+  assert.equal(T.resettle(one, '2026-08-23', { currency: 'KRW' }, 0), one)
 })
 
 test('a rebuild counts a refunded order as the charge and the reversal it was', () => {

@@ -3,6 +3,7 @@
 import { t } from './i18n.js'
 import { convert, rateFor } from './fx.js'
 import { zoneOf } from './settings.js'
+import { KIND_BUY, KIND_SUB, KIND_RENEWAL } from './totals.js'
 
 // Assembled from parts rather than a locale string: every locale punctuates
 // dates differently, and two zones have to line up under each other.
@@ -54,6 +55,21 @@ export function cycleOf(order) {
   if (!order.subscription) return null
   const found = RENEWAL.exec(order.id ?? '')
   return found ? Number(found[1]) + 2 : 1
+}
+
+// Which of the three things this order is, for the split that answers "how many
+// renewals in August". Read off the same two facts the heading is: whether Play
+// calls it a subscription, and whether its id carries the renewal suffix.
+//
+// Shared with the tally rather than worked out twice, so the line the reader was
+// sent and the figure they are later given cannot disagree about what it was. A
+// refund keeps the kind of the sale it undoes — it is a renewal coming back out,
+// and filing it apart would leave the renewal row counting money it no longer
+// has.
+export function kindOf(order) {
+  const cycle = cycleOf(order)
+  if (cycle == null) return KIND_BUY
+  return cycle > 1 ? KIND_RENEWAL : KIND_SUB
 }
 
 // Play's service fee is 15% on subscription revenue and on the first $1M of

@@ -4,7 +4,7 @@ import {
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured, zoneOf } from './settings.js'
 import { plan } from './filters.js'
-import { describe, label, estimatedNet, isSettled, totalLine } from './format.js'
+import { describe, label, estimatedNet, isSettled, totalLine, kindOf } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
 import {
   record as tally, sum as sumTotals, sumRange, trim as trimTotals, shift,
@@ -89,7 +89,12 @@ async function putRight({ all, fx, seen, since, buckets, charged, epoch, setting
     ledger = confirmCharge(ledger, o.id, now.amount)
     const by = now.amount - was
     if (!by) continue
-    totals = resettle(totals, dayKey(o.at, zoneOf(settings)), o.net?.currency || UNKNOWN_CURRENCY, by)
+    totals = resettle(
+      totals,
+      dayKey(o.at, zoneOf(settings)),
+      { currency: o.net?.currency || UNKNOWN_CURRENCY, kind: kindOf(o) },
+      by,
+    )
     moved += 1
     drift += by
   }
@@ -637,7 +642,7 @@ async function recount(s, arg) {
     if (day < from || day > to || partial.has(day)) continue
 
     const paid = estimatedNet(o, fx)
-    const spent = { net: paid, currency: fx.currency, from: o.net?.currency }
+    const spent = { net: paid, currency: fx.currency, from: o.net?.currency, kind: kindOf(o) }
     if (o.state === 'refunded') {
       // Play returns an order once, under the state it is in now, so a refunded
       // one arrives as the reversal alone. The charge it reverses happened too,
@@ -1133,6 +1138,10 @@ async function onSuccess(s, all) {
         // about a country's sales is really about. Read off the order even for a
         // reversal, where only the code is trustworthy.
         from: o.net?.currency,
+        // And what kind of sale it was, so "how many renewals last month" is a
+        // question the tally can answer rather than one it has to re-fetch Play
+        // to guess at.
+        kind: kindOf(o),
       }),
     )
   }
