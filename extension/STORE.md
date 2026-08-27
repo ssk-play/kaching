@@ -43,7 +43,8 @@ phone beyond Telegram itself.
   a day, a month or a year (`/recount 2026-08`) — and `/adjust -6500` patches a
   day by hand, either direction, any day
 - Anything you type that is not a command is answered as a question about the
-  totals — "how did last week go, day by day" — by reading the same tally.
+  totals — "how did last week go, day by day", "how many subscription renewals
+  in August and what were they worth" — by reading the same tally.
   Optional, off until you enter your own API key, and read-only: it cannot
   change a figure. `/compact` sums the conversation up so far and carries on from
   the recap. Works with any OpenAI-compatible service — OpenAI by

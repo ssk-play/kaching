@@ -53,7 +53,16 @@ and anything else you type is answered too — no prefix, no menu entry to find:
 → 8월 19일 12,000원 · 20일 0원 · 21일 45,500원 …
 
 그럼 지난달은?
+
+8월 구독 갱신은 몇건이고, 수익은 얼마인지 알려줘
+→ 갱신 36건, 161,000원 (환불 1건 -4,600원)
 ```
+
+It reads the tally three ways: day by day, split by the currency the buyer paid
+in, and split by whether each sale was a one-off purchase, a new subscription or
+a renewal. Anything outside those three — a figure per app or per product, a
+country rather than a currency, why a number moved — it says it cannot answer
+rather than assembling one out of parts that were not measured together.
 
 The last four exchanges are kept for half an hour, which is what lets the second
 question mean anything. After that a question stands on its own again. `/compact`

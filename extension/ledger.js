@@ -7,7 +7,8 @@
 // wrong ledger; a wrong read is only a wrong sentence, which the figures quoted
 // beside it give the reader a way to catch.
 import {
-  dayOf, startedAt, shift, sumRange, hasBreakdown, isDay, UNKNOWN_CURRENCY,
+  dayOf, startedAt, shift, sumRange, hasBreakdown, hasKinds, isDay, UNKNOWN_CURRENCY,
+  KIND_BUY, KIND_SUB, KIND_RENEWAL,
 } from './totals.js'
 
 // Long enough for "the last two months", short enough that no single question
@@ -98,17 +99,22 @@ export function rangeOf(totals, adjustments, { from, to }, today) {
   return { since, days: out }
 }
 
-// The same money as above, dealt into piles by the currency the buyer paid in,
-// over any span at all. No day cap here because the answer is one row per
-// currency rather than one per day: a question about the whole history costs the
-// same handful of lines as a question about last week, which is what lets
-// "total revenue in INR" be answered in a single call.
+// The same money as above, dealt into piles: by the currency the buyer paid in,
+// or by what kind of sale it was. Over any span at all — no day cap here,
+// because the answer is one row per pile rather than one per day, so a question
+// about the whole history costs the same handful of lines as one about last
+// week. That is what lets "total revenue in INR" and "how many renewals in
+// August" each be answered in a single call.
 //
-// The amounts are in the developer's payout currency, not the buyer's. They are
-// the very numbers the daily totals are made of, only sorted — so a currency's
-// figure and the day figures it came out of can never disagree, and nothing here
+// The amounts are in the developer's payout currency, whichever split is asked
+// for. They are the very numbers the daily totals are made of, only sorted — so
+// a row and the day figures it came out of can never disagree, and nothing here
 // is converted a second time.
-export function byCurrency(totals, adjustments, { from, to } = {}, today) {
+//
+// One function for both because the two splits are the same shape and the same
+// arithmetic; a second copy of this is how one of them would start reporting a
+// correction, or a gap, that the other did not.
+function splitBy({ field, rows: label, row: one, whole }, totals, adjustments, { from, to } = {}, today) {
   // Both ends optional, and both default to the widest honest answer: omitted,
   // the question is "all of it", which is the common one and should not cost the
   // model a turn spent guessing an install date it has not been told.
@@ -123,29 +129,29 @@ export function byCurrency(totals, adjustments, { from, to } = {}, today) {
   }
   const span = resolve(totals, adjustments, { from: from ?? '0000-01-01', to: to ?? today }, today)
   if (span.error) return span
-  if (!span.since) return { since: null, currencies: [], note: 'the tally has no days recorded yet' }
+  if (!span.since) return { since: null, [label]: [], note: 'the tally has no days recorded yet' }
   const { since, first, last } = span
 
   const totalled = sumRange(totals, first, last)
   const corrected = sumRange(adjustments, first, last)
-  const currencies = Object.entries(totalled.currencies)
-    .map(([currency, c]) => {
-      const out = { currency, amount: c.amount, orders: c.orders }
+  const rows = Object.entries(totalled[field])
+    .map(([name, c]) => {
+      const out = { [one]: name, amount: c.amount, orders: c.orders }
       if (c.refunds) out.refunds = c.refunds
       if (c.refunded) out.refunded = c.refunded
       if (c.uncounted) out.uncounted = c.uncounted
       return out
     })
-    // Biggest first: a question about currencies is nearly always a question
-    // about which ones matter, and the tail is the part that can be skimmed.
+    // Biggest first: a question about a split is nearly always a question about
+    // which parts of it matter, and the tail is the part that can be skimmed.
     .sort((a, b) => b.amount - a.amount)
 
-  // Days recorded before the split existed. Their money is in the daily totals
+  // Days recorded before this split existed. Their money is in the daily totals
   // and in none of the rows above, so a figure quoted from here without saying
-  // so would read as a currency that sold nothing rather than as one this cannot
+  // so would read as a pile that earned nothing rather than as one this cannot
   // yet account for.
   const blind = Object.keys(totals).filter(
-    (day) => day >= first && day <= last && !hasBreakdown(totals[day]),
+    (day) => day >= first && day <= last && !whole(totals[day]),
   ).length
 
   return {
@@ -153,19 +159,35 @@ export function byCurrency(totals, adjustments, { from, to } = {}, today) {
     from: first,
     to: last,
     payoutCurrency: totalled.currency ?? corrected.currency ?? null,
-    currencies,
-    // Hand-entered corrections belong to no buyer, so they are named apart
-    // rather than folded into one of the rows. The rows plus this is the day
-    // total; the rows alone are not.
+    [label]: rows,
+    // Hand-entered corrections belong to no buyer and to no kind of sale, so
+    // they are named apart rather than folded into one of the rows. The rows
+    // plus this is the day total; the rows alone are not.
     ...(corrected.amount ? { corrections: corrected.amount } : {}),
     ...(blind
       ? {
           daysNotSplit: blind,
-          note: `${blind} day(s) in this range were recorded before sales were split by currency; their money is in the daily totals but in none of the rows above`,
+          note: `${blind} day(s) in this range were recorded before this split existed; their money is in the daily totals but in none of the rows above. A /recount of those days fills them in`,
         }
       : {}),
   }
 }
+
+// The plural names the list in the answer and the singular names the field in
+// each row, spelled out rather than derived: "currencies" does not lose an "s"
+// to become "currency", and a rule that works for one split and not the other is
+// worse than two words.
+export const byCurrency = (totals, adjustments, range, today) =>
+  splitBy(
+    { field: 'currencies', rows: 'currencies', row: 'currency', whole: hasBreakdown },
+    totals, adjustments, range, today,
+  )
+
+export const byKind = (totals, adjustments, range, today) =>
+  splitBy(
+    { field: 'kinds', rows: 'kinds', row: 'kind', whole: hasKinds },
+    totals, adjustments, range, today,
+  )
 
 const READ_TOTALS = {
   name: 'read_totals',
@@ -224,6 +246,40 @@ const READ_BY_CURRENCY = {
 // Read fresh on every call rather than handed in once. A question may take
 // several turns, and a poll landing an order in the middle of one should be
 // answered from what is in storage now, not from a copy taken before it arrived.
+const READ_BY_KIND = {
+  name: 'read_by_kind',
+  description:
+    "This bot's own tally split by what kind of sale each order was, one row per kind, " +
+    'biggest first. Use this — not read_totals — for any question about subscriptions, ' +
+    'renewals or one-off purchases, including how many there were: there is no limit on ' +
+    'the range here. Both "from" and "to" are optional and default to the whole recorded ' +
+    'history. The "kind" of a row is "' +
+    KIND_RENEWAL +
+    '" for a subscription charge after the first one, "' +
+    KIND_SUB +
+    '" for the charge that started a subscription, "' +
+    KIND_BUY +
+    '" for a one-off purchase, and "' +
+    UNKNOWN_CURRENCY +
+    '" for an order this could not place. Amounts are in "payoutCurrency", the ' +
+    'developer\'s own. Fields per row, omitted when zero except "kind" and "amount": ' +
+    '"amount" is the net from that kind with refunds ALREADY subtracted; "orders" counts ' +
+    'charges — for renewals that IS the number of renewals; "refunds" counts reversals ' +
+    'and is not in "orders"; "refunded" is what they were worth, negative; "uncounted" is ' +
+    'orders that could not be converted, so that row is short by them. "corrections" is ' +
+    '/adjust entries, which belong to no kind and are in no row. If "daysNotSplit" is ' +
+    'present, say the figure is incomplete and why.',
+  parameters: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'First day of the range, YYYY-MM-DD. Omit for all time.' },
+      to: { type: 'string', description: 'Last day of the range, YYYY-MM-DD. Omit for all time.' },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+}
+
 const stored = () => chrome.storage.local.get({ totals: {}, adjustments: {} })
 
 export const tools = (today) => [
@@ -239,6 +295,13 @@ export const tools = (today) => [
     run: async (input) => {
       const { totals, adjustments } = await stored()
       return byCurrency(totals, adjustments, input ?? {}, today)
+    },
+  },
+  {
+    spec: READ_BY_KIND,
+    run: async (input) => {
+      const { totals, adjustments } = await stored()
+      return byKind(totals, adjustments, input ?? {}, today)
     },
   },
 ]

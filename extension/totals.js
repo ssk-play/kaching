@@ -8,7 +8,7 @@
 // a day that will be trimmed off on the next write — how far back the books can
 // reach at all.
 //
-// Three years. A day costs about 265 bytes once it carries its currency split,
+// Three years. A day costs about 400 bytes once it carries both splits,
 // so the whole store is well under a megabyte against the ten chrome.storage
 // .local gives, and the folds that answer /month walk it in no time. The old
 // four hundred was set when a recount could only restate days the tally already
@@ -182,8 +182,15 @@ export function weekStart(key) {
 }
 
 const empty = () => ({
-  currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0, currencies: {},
+  currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
+  currencies: {}, kinds: {},
 })
+
+// The splits a day is dealt into besides its own total. Named in one place
+// because every fold, every merge and every read has to walk the same list —
+// a third one added to some of them and not the others is a figure that stops
+// adding up to the day it came from.
+export const SPLITS = ['currencies', 'kinds']
 
 // A buyer whose currency Play did not report. Filed under a key rather than
 // dropped, so the split always accounts for every order in the day — and so a
@@ -191,7 +198,21 @@ const empty = () => ({
 // tells it apart from one written before the split existed.
 export const UNKNOWN_CURRENCY = '?'
 
-const perCurrency = () => ({ amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0 })
+// One row of a split. The same five fields whichever split it belongs to, so a
+// question about a currency and a question about renewals are answered from the
+// same shape and read the same way.
+const perSplit = () => ({ amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0 })
+
+// What kind of sale an order was. A renewal is a subscription charge after the
+// first, which is the distinction the count exists for: five renewals and five
+// new subscriptions are the same revenue and very different news.
+export const KIND_BUY = 'buy'
+export const KIND_SUB = 'sub'
+export const KIND_RENEWAL = 'renewal'
+// An order this could not place — filed rather than dropped, for the same reason
+// the currency split files '?'.
+export const UNKNOWN_KIND = '?'
+export const hasKinds = (bucket) => Object.keys(bucket?.kinds ?? {}).length > 0
 
 // A bucket predating the split has no entry at all; one written since always
 // has at least the '?' key. The difference matters because a question about a
@@ -203,14 +224,14 @@ export const hasBreakdown = (bucket) => Object.keys(bucket?.currencies ?? {}).le
 // filed under the currency the buyer paid in. Deliberately not a second
 // conversion and not a fresh sign: the split adds back up to the day because it
 // is the day's own numbers, dealt into piles.
-function attribute(currencies, code, { amount, refund, counted }) {
-  const next = { ...perCurrency(), ...currencies?.[code] }
+function attribute(split, key, { amount, refund, counted }) {
+  const next = { ...perSplit(), ...split?.[key] }
   if (refund) next.refunds += 1
   else next.orders += 1
   if (counted) next.amount += amount
   else next.uncounted += 1
   if (refund && counted) next.refunded += amount
-  return { ...currencies, [code]: next }
+  return { ...split, [key]: next }
 }
 
 // Only money already in the developer's own currency is summed. An order whose
@@ -218,7 +239,7 @@ function attribute(currencies, code, { amount, refund, counted }) {
 // NOK to a KRW total would produce a number that looks right and is not. Same for
 // a refund with no charge to take back out. Either way the message above printed
 // a figure the amount does not carry, so it is counted apart and the line says so.
-export function record(buckets, key, { net, refund, currency, from }) {
+export function record(buckets, key, { net, refund, currency, from, kind }) {
   // Merged onto a fresh shape rather than used as-is: a bucket written by an
   // older version is missing fields added since, and += on undefined is NaN.
   const prev = { ...empty(), ...buckets[key] }
@@ -235,9 +256,12 @@ export function record(buckets, key, { net, refund, currency, from }) {
   // convention on a reversal is not something this can rely on — the reason
   // fx.js refuses to learn a rate from one — so what gets filed under the code
   // is the payout figure above, which a reversal has already negated correctly.
-  next.currencies = attribute(prev.currencies, from || UNKNOWN_CURRENCY, {
-    amount: net?.amount ?? 0, refund, counted,
-  })
+  const share = { amount: net?.amount ?? 0, refund, counted }
+  next.currencies = attribute(prev.currencies, from || UNKNOWN_CURRENCY, share)
+  // The same figure again, dealt a second way. Both splits are the day's own
+  // numbers rather than a re-reading of the order, so each of them adds back up
+  // to the day and to the other.
+  next.kinds = attribute(prev.kinds, kind || UNKNOWN_KIND, share)
   return { ...buckets, [key]: next }
 }
 
@@ -260,14 +284,16 @@ function fold(buckets, wanted) {
     out.refunds += b.refunds
     out.refunded += b.refunded ?? 0
     out.uncounted += b.uncounted
-    for (const [code, c] of Object.entries(b.currencies ?? {})) {
-      const at = out.currencies[code] ?? perCurrency()
-      out.currencies[code] = {
-        amount: at.amount + (c.amount ?? 0),
-        orders: at.orders + (c.orders ?? 0),
-        refunds: at.refunds + (c.refunds ?? 0),
-        refunded: at.refunded + (c.refunded ?? 0),
-        uncounted: at.uncounted + (c.uncounted ?? 0),
+    for (const split of SPLITS) {
+      for (const [name, c] of Object.entries(b[split] ?? {})) {
+        const at = out[split][name] ?? perSplit()
+        out[split][name] = {
+          amount: at.amount + (c.amount ?? 0),
+          orders: at.orders + (c.orders ?? 0),
+          refunds: at.refunds + (c.refunds ?? 0),
+          refunded: at.refunded + (c.refunded ?? 0),
+          uncounted: at.uncounted + (c.uncounted ?? 0),
+        }
       }
     }
   }
@@ -333,7 +359,7 @@ export function amountFor(ledger, id, currency) {
 // A day the bucket window has already dropped is left alone rather than
 // recreated: putting it back would resurrect a single order as if it were the
 // whole day's takings.
-export function resettle(buckets, key, code, amount) {
+export function resettle(buckets, key, { currency, kind }, amount) {
   const prev = buckets[key]
   if (!prev || !amount) return buckets
   // A bucket that has a split but no row under this code yet gets one: moving
@@ -345,17 +371,25 @@ export function resettle(buckets, key, code, amount) {
   // correction and not the money it is correcting — and the day would stop
   // being reported as unsplit while still being short by everything else in it.
   // A gap that says it is a gap beats one that has been papered over.
-  const at = prev.currencies?.[code]
-  if (!at && !hasBreakdown(prev)) {
-    return { ...buckets, [key]: { ...prev, amount: prev.amount + amount } }
+  //
+  // Decided per split, not once for the bucket: a day written when only the
+  // currency split existed has one and not the other, and the half that is there
+  // still has to be kept adding up.
+  const moved = (split, name) => {
+    const rows = prev[split]
+    if (!rows?.[name] && !Object.keys(rows ?? {}).length) return null
+    const row = rows[name] ?? perSplit()
+    return { ...rows, [name]: { ...row, amount: row.amount + amount } }
   }
-  const row = at ?? perCurrency()
+  const currencies = moved('currencies', currency || UNKNOWN_CURRENCY)
+  const kinds = moved('kinds', kind || UNKNOWN_KIND)
   return {
     ...buckets,
     [key]: {
       ...prev,
       amount: prev.amount + amount,
-      currencies: { ...prev.currencies, [code]: { ...row, amount: row.amount + amount } },
+      ...(currencies ? { currencies } : {}),
+      ...(kinds ? { kinds } : {}),
     },
   }
 }
