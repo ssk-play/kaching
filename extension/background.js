@@ -4,15 +4,16 @@ import {
 import { fetchOrders, keyFor } from './playconsole.js'
 import { load, isConfigured, zoneOf } from './settings.js'
 import { plan } from './filters.js'
-import { describe, label, estimatedNet, isSettled, totalLine, kindOf } from './format.js'
+import { describe, label, totalLine, isSettled, estimatedNet } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
 import {
-  record as tally, sum as sumTotals, sumRange, trim as trimTotals, shift,
-  MAX_DAYS as MAX_BUCKET_DAYS,
-  remember as rememberCharge, amountFor, isEstimate, confirm as confirmCharge,
-  resettle, startedAt, adjust, combine, UNKNOWN_CURRENCY,
-  dayKey, startOf, endOf, monthKey, weekStart, dayOf, periodOf, DAY,
+  sum as sumTotals, sumRange, shift, trim as trimDays, MAX_DAYS as MAX_BUCKET_DAYS,
+  adjust, combine, dayKey, startOf, endOf, monthKey, weekStart, dayOf, periodOf, DAY,
 } from './totals.js'
+import {
+  foldDays, read as ordersRead, write as ordersWrite, countInto,
+  forget as forgetOldOrders,
+} from './orders.js'
 import { ask, summarize, compacted, isQuestion, freshTurns, nextTurns } from './llm.js'
 import { tools as ledgerTools } from './ledger.js'
 import { t } from './i18n.js'
@@ -49,64 +50,21 @@ const state = () =>
     seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0, lastOkAt: 0,
   })
 
-// An order Play has not settled yet is counted from an estimate: the price the
-// buyer was charged, less the standard cut. That is the right guess for nearly
-// every order and the wrong one for a discount Google funds, where the buyer is
-// charged 400 and the developer banks 2,500 — the tally would keep the 400.
+// Play reports no net at all until it settles an order, so what a day counts for
+// an unsettled one is an estimate off the price the buyer was charged — right
+// for nearly every order, and wrong for one whose discount Google funds, where
+// the buyer pays 400 and the developer banks 2,500.
 //
-// Play fills the real figure in days later, under the same state, so nothing
-// re-announces the order and nothing else would ever revisit it. This does: the
-// charge ledger already remembers what each order put into the tally, so the
-// difference is a subtraction, and the bucket is moved by it without being
-// counted again.
-//
-// Only the amount moves. The reader was told about the order once, with the net
-// marked as assumed, and telling them again would be an order that appears to
-// have happened twice. What did move is said in one line, because a day's figure
-// that jumps with nothing to explain it is worse than a line nobody needed.
-async function putRight({ all, fx, seen, since, buckets, charged, epoch, settings }) {
-  let totals = buckets
-  let ledger = charged
-  let moved = 0
-  let drift = 0
-
-  for (const o of all) {
-    if (o.state !== 'charged' || !isSettled(o)) continue
-    // Announced and counted, and counted from a guess. An entry written before
-    // the flag existed reads as settled and is left to /recount.
-    if (!seen.has(keyFor(o)) || !isEstimate(ledger, o.id)) continue
-    // History adopted at first sync was banked at zero on purpose. Settling it
-    // now would add money the tally deliberately never counted.
-    if (o.at < since) continue
-    const now = estimatedNet(o, fx)
-    if (!now || now.currency !== fx.currency) continue
-    const was = amountFor(ledger, o.id, fx.currency)
-    if (was == null) continue
-
-    // Confirmed whether or not the figure moved: what makes this cheap is that
-    // an order is looked at once, not on every poll for as long as Play keeps
-    // returning it.
-    ledger = confirmCharge(ledger, o.id, now.amount)
-    const by = now.amount - was
-    if (!by) continue
-    totals = resettle(
-      totals,
-      dayKey(o.at, zoneOf(settings)),
-      { currency: o.net?.currency || UNKNOWN_CURRENCY, kind: kindOf(o) },
-      by,
-    )
-    moved += 1
-    drift += by
-  }
-
-  if (ledger === charged) return
-  // A reset mid-poll means these buckets describe an account the user has just
-  // finished clearing.
-  if (epoch !== resetEpoch) return
-  await chrome.storage.local.set({ totals: totals, counted: ledger })
-  if (!moved) return
-
-  const signed = `${drift > 0 ? '+' : ''}${drift}`
+// Nothing re-announces an order Play merely settled, so without this the day
+// would carry the guess for good. It used to take a ledger of what each charge
+// had added, a flag marking which of those were guesses, and a pass that moved
+// the difference into the bucket by hand. Now the order is simply stored again
+// and the day is folded from it — so all that is left to do is say so, because
+// a day's figure that jumps with nothing to explain it is worse than a line
+// nobody needed.
+async function announceDrift(moved, by, settings) {
+  if (!moved || !by) return
+  const signed = `${by > 0 ? '+' : ''}${by}`
   await record('info', 'logSettled', moved, signed)
   // Best effort: a notice that did not land must not undo a correction that did.
   await sendTelegram(
@@ -282,9 +240,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       // through the old account's currency.
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
-        rates: {}, payoutCurrency: null, totals: {}, adjustments: {},
-        counted: [], countedSince: 0, chatTurns: null,
+        rates: {}, payoutCurrency: null, adjustments: {}, chatTurns: null, sweptOn: null,
       })
+      // The orders themselves, which are the tally. Removed rather than blanked:
+      // they are one key per month, and a month with nothing in it should not be
+      // a key at all.
+      const held = Object.keys(await chrome.storage.local.get(null))
+      await chrome.storage.local.remove([
+        ...held.filter((k) => k.startsWith('orders:')),
+        // Written by versions that kept a running total and a charge ledger
+        // beside it. Nothing reads them now, and leaving them would be a
+        // megabyte of a cleared account still on disk.
+        'totals', 'counted', 'countedSince',
+      ])
       badge('', '#9e9e9e')
       await record('info', 'logReset')
       return 'cleared'
@@ -348,8 +316,10 @@ async function waitForCommands(s) {
   // instead.
   await rememberChats(chatsIn(list))
 
-  const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
-  const today = dayKey(Date.now(), zoneOf(s))
+  const zone = zoneOf(s)
+  const today = dayKey(Date.now(), zone)
+  const { adjustments } = await chrome.storage.local.get({ adjustments: {} })
+  const totals = await tallyOver(commandSpan(today), today, zone)
   // Only moves past what was actually dealt with. A reply lost to a 429 or a
   // dropped connection is left unacknowledged so the next poll tries again,
   // rather than being confirmed away unanswered and unlogged.
@@ -423,6 +393,25 @@ function span(buckets, key, today) {
 const spanOf = (totals, adjustments, key, today) =>
   combine(span(totals, key, today), span(adjustments, key, today))
 
+// The tally, folded out of the store for the days a question needs. There is no
+// stored total to read: a day's figure is worked out from the orders every time
+// it is asked for, which is what makes /today, the model's read and a /recount
+// answers that cannot drift apart.
+async function tallyOver(from, to, zone) {
+  const { rates, payoutCurrency } = await chrome.storage.local.get({
+    rates: {}, payoutCurrency: null,
+  })
+  return foldDays(await ordersRead(from, to, zone), zone, { currency: payoutCurrency, rates })
+}
+
+// The widest span any of the three fixed commands can ask about: this month, or
+// the week that ran into it from the month before.
+const commandSpan = (today) => {
+  const first = `${monthKey(today)}-01`
+  const week = weekStart(today)
+  return week < first ? week : first
+}
+
 // Both commands take an optional day ahead of everything else, because a tally
 // that cannot go back is no use on the day you notice it was wrong.
 function dayArg(arg, today) {
@@ -456,12 +445,12 @@ const dayLine = (day, today, figures) =>
 // entered in the meantime straight back out.
 async function applyCorrection(arg, zone) {
   const today = dayKey(Date.now(), zone)
-  const { totals, adjustments, payoutCurrency: paid } = await chrome.storage.local.get({
-    totals: {}, adjustments: {}, payoutCurrency: null,
+  const { adjustments, payoutCurrency: paid } = await chrome.storage.local.get({
+    adjustments: {}, payoutCurrency: null,
   })
   const asked = dayArg(arg, today)
   const amount = asked && signedAmount(asked.rest)
-  const currency = totals[asked?.day]?.currency ?? adjustments[asked?.day]?.currency ?? paid
+  const currency = adjustments[asked?.day]?.currency ?? paid
   if (!amount) return t('cmdAdjustUsage', currency ?? '—')
 
   const epoch = resetEpoch
@@ -469,10 +458,11 @@ async function applyCorrection(arg, zone) {
   // Only reachable if the payout currency changed under a day already carrying a
   // correction; there is nothing sensible to add across the two.
   if (!next) return t('cmdAdjustUsage', adjustments[asked.day].currency)
-  if (epoch === resetEpoch) await chrome.storage.local.set({ adjustments: trimTotals(next) })
+  if (epoch === resetEpoch) await chrome.storage.local.set({ adjustments: trimDays(next) })
   await record(
     'info', 'logAdjust', asked.day, `${amount > 0 ? '+' : ''}${amount} ${currency ?? ''}`.trim(),
   )
+  const totals = await tallyOver(asked.day, asked.day, zone)
   return dayLine(asked.day, today, dayOf(totals, next, asked.day))
 }
 
@@ -602,6 +592,19 @@ const backTo = (day, today) =>
 // answered with the figure the reader already had.
 const widestSpan = (today) => shift(today, -(RECOUNT_MAX_DAYS - 2))
 
+// Fetches a span from Play again and merges what comes back into the store.
+//
+// This used to rebuild each day's total from the orders it fetched and write
+// that over the top, which made a truncated answer dangerous: a day handed back
+// with half its orders would be restated at half its value. Whole days had to be
+// declined by name, a poll in flight had to be waited out so it could not put
+// the old figures straight back, and the charge ledger had to be rebuilt
+// alongside so a later refund took out what this rebuild had counted.
+//
+// None of that survives storing the orders. Merging is by order id and never
+// removes anything, so a page that came back short simply refreshes fewer
+// orders than it might have. There is no figure to overwrite, because the
+// figures are folded out of the store on the way to being read.
 async function recount(s, arg) {
   const zone = zoneOf(s)
   const today = dayKey(Date.now(), zone)
@@ -613,68 +616,54 @@ async function recount(s, arg) {
   if (!(days <= RECOUNT_MAX_DAYS)) return t('cmdRecountUsage', RECOUNT_MAX_DAYS)
 
   const epoch = resetEpoch
-  // Days Play would not hand over whole even asked for on their own. They are
-  // left exactly as they were: a day rewritten from part of itself loses the
-  // rest, and the "found nothing, leave it alone" rule does not cover a day that
-  // came back with some of its orders.
+  // Days Play would not hand over whole even asked for on their own. Named in
+  // the reply so a total that may be missing orders says which days they are —
+  // but no longer dangerous, since nothing is being overwritten.
   const short = []
   // Filled in by the walk: how far back it actually got.
   const reached = {}
   const all = await ordersOver(s.developerId, zone, from, to, short, reached)
   const fx = await exchange(all, epoch)
-  const st = await state()
-  const announced = new Set([...st.seen, ...st.delivered])
 
-  const partial = new Set(short)
-
-  // Everything Play still shows for these days, whether the chat was ever told
-  // about it or not. The live tally can only count what it announced — it learns
-  // of an order by announcing it — but this is the command for making the books
-  // agree with Play, and history adopted at first sync is exactly what a reader
-  // asking for "all of it" wants back.
-  let buckets = {}
-  let banked = new Map()
-  let adopted = 0
-  let first = null
-  for (const o of all) {
-    if (!TERMINAL_STATES.has(o.state)) continue
+  const wanted = all.filter((o) => {
+    if (!TERMINAL_STATES.has(o.state)) return false
     const day = dayKey(o.at, zone)
-    if (day < from || day > to || partial.has(day)) continue
-
-    const paid = estimatedNet(o, fx)
-    const spent = { net: paid, currency: fx.currency, from: o.net?.currency, kind: kindOf(o) }
-    if (o.state === 'refunded') {
-      // Play returns an order once, under the state it is in now, so a refunded
-      // one arrives as the reversal alone. The charge it reverses happened too,
-      // and on this same day — the tally files a reversal under the day of the
-      // order, not the day of the refund. Counting only the minus would leave
-      // the day short by a charge it did receive, and disagree with what /today
-      // said at the time.
-      const gross = paid && { currency: paid.currency, amount: -paid.amount }
-      buckets = tally(buckets, day, { ...spent, net: gross, refund: false })
-      buckets = tally(buckets, day, { ...spent, refund: true })
-    } else {
-      buckets = tally(buckets, day, { ...spent, refund: false })
-      // What this rebuild says the charge put in, so a later reversal takes out
-      // that and not whatever the tally happened to guess before.
-      if (paid && paid.currency === fx.currency) {
-        banked.set(o.id, { amount: paid.amount, estimated: !isSettled(o) })
-      }
-    }
-    if (!announced.has(keyFor(o))) adopted += 1
-    first = first == null || o.at < first ? o.at : first
-  }
-
-  const rebuilt = []
-  for (let day = from; day <= to; day = shift(day, 1)) {
-    if (partial.has(day)) continue
-    rebuilt.push([day, sumTotals(buckets, day)])
-  }
-  const figures = sumRange(buckets, from, to)
-  const moved = await restate(rebuilt, epoch, {
-    banked, first, counted: all, currency: fx.currency, partial, from, to, zone,
+    return day >= from && day <= to
   })
-  await record('info', 'logRecount', from === to ? from : `${from}…${to}`, moved.note)
+
+  // Read, written and read again under the one claim. A full-span recount spends
+  // about two minutes fetching, which is several scheduled polls — and a poll
+  // landing between the two reads would show up as a day this recount changed,
+  // costing the reader an /adjust correction it never superseded.
+  //
+  // A reset landing while Play was answering is checked inside the claim too:
+  // these orders belong to an account the user has just finished clearing, and
+  // the check has to hold at the moment of the write rather than when it was
+  // queued.
+  const { was, adopted, now } = await claim(async () => {
+    if (epoch !== resetEpoch) return {}
+    const kept = await ordersRead(from, to, zone)
+    const known = new Set(kept.map((o) => o.id))
+    await ordersWrite(wanted, zone)
+    return {
+      was: foldDays(kept, zone, fx),
+      adopted: wanted.filter((o) => !known.has(o.id)).length,
+      now: foldDays(await ordersRead(from, to, zone), zone, fx),
+    }
+  })
+  if (!now) return t('totalRecountUntouched')
+  const figures = sumRange(now, from, to)
+  const drift = figures.amount - sumRange(was, from, to).amount
+  const changed = daysApart(was, now, from, to)
+
+  // A correction entered by hand for a day this has just refreshed has nothing
+  // left to patch: the day is now what Play says it is.
+  if (changed.length) await dropCorrections(changed, epoch)
+
+  const moved = changed.length
+    ? t('totalRecountMovedDays', changed.length, `${drift > 0 ? '+' : ''}${drift}`)
+    : t('totalRecountUntouched')
+  await record('info', 'logRecount', from === to ? from : `${from}…${to}`, moved)
 
   const line = totalLine('totalRecount', figures) ?? t('totalRecount', '—', 0)
   const named =
@@ -683,135 +672,50 @@ async function recount(s, arg) {
         ? line
         : `${from} ${line}`
       : `${from}…${to} ${line}`
-  const parts = [named, moved.said, adopted ? t('totalRecountAdopted', adopted) : '']
+  const parts = [named, moved, adopted ? t('totalRecountAdopted', adopted) : '']
   // A figure that might be missing orders has to say so, and name the days it
-  // declined to touch — there is nothing else the reader can do about them, but
-  // a total quietly short by a day is worse than one that says which.
+  // could not read whole — there is nothing else the reader can do about them,
+  // but a total quietly short by a day is worse than one that says which.
   if (short.length) parts.push(t('totalRecountCappedAt', RECOUNT_PAGE, short.sort().join(', ')))
   if (reached.day > from) parts.push(t('totalRecountReached', reached.day))
   return parts.filter(Boolean).join(' · ')
 }
 
-// Each day is set to what Play says it was, and any correction entered by hand
-// for it is dropped: a correction exists to patch a figure the tally got wrong,
-// and there is nothing left to patch. Only the days handed in are touched.
-//
-// A day the recount found nothing for is left alone, whether it was asked about
-// on its own or as one of three hundred. Zeroing a day on the strength of an
-// empty answer is the one way this could destroy a figure it cannot rebuild —
-// and over a span, an answer truncated by the page limit is exactly what an
-// empty day looks like.
-//
-// A poll in flight holds its own copy of the buckets and writes it back after
-// every send, so it is waited out first — otherwise it would put the old figures
-// straight back.
-async function restate(rebuilt, epoch, rebuild) {
-  const found = rebuilt.filter(([, figures]) => figures.orders || figures.refunds)
-  if (!found.length) return { said: t('totalRecountUntouched'), note: '' }
-  await inflight?.catch(() => {})
-  if (epoch !== resetEpoch) return { said: t('totalRecountUntouched'), note: '' }
-
-  const work = rewrite(found, rebuild)
-  restating = work.finally(() => {
-    restating = null
-  })
-  return work
+// Which days in the span hold a different figure than they did. Compared on the
+// amount and the counts together, because an order replaced by one worth the
+// same is still news the reply should not swallow.
+function daysApart(was, now, from, to) {
+  const out = []
+  for (let day = from; day <= to; day = shift(day, 1)) {
+    const a = sumTotals(was, day)
+    const b = sumTotals(now, day)
+    if (a.amount !== b.amount || a.orders !== b.orders || a.refunds !== b.refunds) out.push(day)
+  }
+  return out
 }
 
-// Kept apart from the waiting above so the claim on `restating` is made in the
-// same tick the work starts in: an await between the two would be a gap a poll
-// could start in, which is the whole thing being guarded against.
-async function rewrite(found, rebuild) {
-  const { totals, adjustments } = await chrome.storage.local.get({ totals: {}, adjustments: {} })
-  const ledger = await rebank(rebuild)
-  let nextTotals = totals
-  let nextAdjustments = adjustments
-  let delta = 0
-  let moved = 0
-  // Counted, because dropping one hand-entered correction is the documented
-  // behaviour and dropping ninety of them in a single command is news.
-  let cleared = 0
-  for (const [day, figures] of found) {
-    // Read against the stores as they were, not as this loop is leaving them.
-    // Each day stands alone, so that is the same number either way — and saying
-    // so here is cheaper than making the next reader work it out.
-    const before = dayOf(totals, adjustments, day).amount
-    nextTotals = { ...nextTotals, [day]: figures }
-    if (Object.hasOwn(nextAdjustments, day)) {
-      const { [day]: dropped, ...rest } = nextAdjustments
-      nextAdjustments = rest
-      cleared += 1
-    }
-    const amount = figures.amount - before
-    if (amount) {
-      delta += amount
-      moved += 1
+async function dropCorrections(days, epoch) {
+  const { adjustments } = await chrome.storage.local.get({ adjustments: {} })
+  const next = { ...adjustments }
+  let dropped = false
+  for (const day of days) {
+    if (day in next) {
+      delete next[day]
+      dropped = true
     }
   }
-  await chrome.storage.local.set({
-    totals: trimTotals(nextTotals),
-    ...(nextAdjustments === adjustments ? {} : { adjustments: nextAdjustments }),
-    ...ledger,
-  })
-
-  const undone = cleared ? t('totalRecountCleared', cleared) : ''
-  if (!moved) return { said: [t('totalRecountSame'), undone].filter(Boolean).join(' · '), note: '0' }
-  // Grouped like every other figure in the line. A full-span recount moves seven
-  // digits, and "+1853572" beside "KRW 1,910,243" is the one number on the line
-  // the reader has to count out by hand.
-  const signed = `${delta > 0 ? '+' : ''}${delta.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-  return {
-    said: [
-      moved === 1 ? t('totalRecountMoved', signed) : t('totalRecountMovedDays', moved, signed),
-      undone,
-    ]
-      .filter(Boolean)
-      .join(' · '),
-    note: signed,
-  }
+  if (dropped && epoch === resetEpoch) await chrome.storage.local.set({ adjustments: next })
 }
 
-// What the rebuild leaves behind besides the buckets.
-//
-// The charge ledger is what a reversal takes its figure from, so every charge
-// this counted has to be in it at what it counted — an order adopted at zero on
-// the day this was installed would otherwise be refunded for nothing at all.
-// Entries the rebuild did not touch are kept: they are charges outside the span
-// and still perfectly good.
-//
-// Counted orders are marked as already delivered, or the next poll would
-// announce one of them and count it a second time on top of the day this just
-// wrote. That does mean an order from the last few minutes can be counted here
-// and never announced — the money is right and the notification is the thing
-// given up, which is the trade an explicit "make it match Play" is worth.
-async function rebank({ banked, first, counted, currency, partial, from, to, zone }) {
-  const { counted: ledger, countedSince, seen, delivered } = await chrome.storage.local.get({
-    counted: [], countedSince: 0, seen: [], delivered: [],
-  })
-  // Built through remember rather than as literals, so the entry shape — and
-  // which field marks a figure Play has not settled yet — lives in one place.
-  // The ids it would refuse as already known were dropped first, because a
-  // rebuild replacing an entry is the whole point.
-  let next = ledger.filter(([id]) => !banked.has(id))
-  for (const [id, { amount, estimated }] of banked) {
-    next = rememberCharge(next, id, { currency, amount, estimated })
-  }
-  const known = new Set([...seen, ...delivered])
-  for (const o of counted) {
-    if (!TERMINAL_STATES.has(o.state)) continue
-    const day = dayKey(o.at, zone)
-    if (day < from || day > to || partial.has(day)) continue
-    known.add(keyFor(o))
-  }
-  return {
-    counted: next,
-    // Counting reaches back to the oldest order this took in, so a reversal of
-    // one of them is a reversal of money the tally now holds rather than of
-    // history it never saw.
-    countedSince: first != null && (!countedSince || first < countedSince) ? first : countedSince,
-    seen: [...known].slice(-MAX_SEEN),
-    delivered: [],
-  }
+// One writer at a time. chrome.storage has no transactions, so a poll and a
+// recount merging into the same month chunk at once would each read it, each
+// add their own orders, and the second write would drop the first's. Every
+// write to the store goes through here.
+let writing = Promise.resolve()
+function claim(work) {
+  const next = writing.then(work, work)
+  writing = next.catch(() => {})
+  return next
 }
 
 // A sentence, answered by a model on the user's own API key.
@@ -938,25 +842,15 @@ async function rememberChats(seen) {
 
 let inflight = null
 
-// A rebuild rewriting the books and a poll adding to them both work from a copy
-// read out of storage, so whichever writes second wins outright. That is a
-// millisecond of overlap for a poll landing one order — and a /recount of three
-// years takes two minutes to fetch, which is long enough for a scheduled poll to
-// start inside it. If the poll's copy of `seen` won, three hundred adopted
-// orders would look unannounced again and the next check would send every one of
-// them to the chat.
-//
-// So the two take turns. The rebuild waits for a poll in flight; a poll waits
-// for a rebuild that has started writing. Both claims are made with no await in
-// between, which is what makes taking turns work rather than just narrowing the
-// window.
-let restating = null
-
+// A rebuild and a poll no longer contend for the books, because there are no
+// books to overwrite: both merge orders into the store by id, and merging is
+// idempotent. What they still contend for is the month chunk itself, which is
+// read and written whole — so every write goes through claim() above, and this
+// only has to keep one poll in flight at a time.
 export function poll() {
   // A manual click during a scheduled run should show that run's result rather
   // than be turned away — at short intervals the two overlap almost every time.
-  inflight ??= (restating ? restating.catch(() => {}) : Promise.resolve())
-    .then(() => runPoll())
+  inflight ??= runPoll()
     .then(async (result) => {
       await chrome.storage.local.set({ lastRun: { at: stamp(), result } })
       await report(result)
@@ -1026,133 +920,103 @@ async function onSuccess(s, all) {
       // tries again rather than adopting history the user was never told about.
       return onFailure(s, delivery(err))
     }
-    // Adopted, not counted — the totals start empty. Banked at zero so a refund
-    // of any of this has a definite match to find and takes nothing back out,
-    // rather than falling through to an estimate of money that never arrived.
-    let adopted = []
-    for (const o of terminal) {
-      seen.add(keyFor(o))
-      adopted = rememberCharge(adopted, o.id, { currency: fx.currency, amount: 0 })
-    }
-    await write({
-      bootstrapped: true, fails: 0, lastOkAt: Date.now(),
-      counted: adopted, countedSince: Date.now(),
-    })
+    // Adopted, and counted. History used to be banked at zero so day one would
+    // not open with money the chat had never mentioned — which left /today
+    // disagreeing with a /recount of the same day for as long as the install
+    // lived. Now the store is the tally, so what is kept is what is counted:
+    // these orders happened, the reader simply is not told about them one by one.
+    for (const o of terminal) seen.add(keyFor(o))
+    await claim(() => (epoch === resetEpoch ? ordersWrite(terminal, zone) : null))
+    await write({ bootstrapped: true, fails: 0, lastOkAt: Date.now() })
     await record('info', 'logFirstSync', terminal.length)
     badge('', '#4caf50')
     return { bootstrapped: terminal.length }
   }
 
+  const today = dayKey(Date.now(), zone)
+
   // Muted orders wait on no delivery, so they are banked straight away.
   for (const o of muted) seen.add(keyFor(o))
   await write()
+
+  // Everything Play returned goes into the store, whether it is about to be
+  // announced or not — including the orders a filter muted. The tally is a fold
+  // over the store, so this is what counting is now, and the alternative is a
+  // /today that disagrees with a /recount of the same day about orders the
+  // filter hid. A muted order is one the reader chose not to be told about, not
+  // one that did not happen.
+  //
+  // Over the days this fetch actually reaches, not just today: Play settles an
+  // order days after it was charged, and a window scoped to today would never
+  // see the one case this exists for.
+  const stamped = terminal.map((o) => dayKey(o.at, zone)).sort()
+  const spanFrom = stamped[0] && stamped[0] < today ? stamped[0] : today
+  const spanTo = stamped.at(-1) > today ? stamped.at(-1) : today
+  const kept = await ordersRead(spanFrom, spanTo, zone)
+
+  // Orders Play had not settled when they were last stored and has settled now,
+  // and what those orders alone moved by. Read off the two versions rather than
+  // off the day's total: a run that also announced a new order would otherwise
+  // report that order's money as settlement drift, and the notice would be
+  // wrong on exactly the runs where something did settle.
+  const was = new Map(kept.map((o) => [o.id, o]))
+  let settled = 0
+  let drift = 0
+  for (const o of terminal) {
+    const old = was.get(o.id)
+    if (!old || isSettled(old) || !isSettled(o)) continue
+    const before_ = estimatedNet(old, fx)
+    const after_ = estimatedNet(o, fx)
+    if (!after_ || after_.currency !== fx.currency) continue
+    settled += 1
+    drift += after_.amount - (before_?.currency === fx.currency ? before_.amount : 0)
+  }
+
+  // The guard belongs inside the claim: checked when the work is queued, a reset
+  // landing while the mutex is held would let this repopulate the very chunks
+  // the reset had just removed.
+  await claim(() => (epoch === resetEpoch ? ordersWrite(terminal, zone) : null))
 
   // A short journal of just this run's deliveries: writing it after every send
   // costs almost nothing, and a worker death loses at most the single order
   // whose send had already landed.
   const journal = []
-  const {
-    totals: storedTotals, counted, countedSince, adjustments: corrections,
-  } = await chrome.storage.local.get({
-    totals: {}, counted: [], countedSince: 0, adjustments: {},
-  })
-  let buckets = storedTotals
-  let charged = counted
-
-  // The ledger arrived after the totals did, so an install that was already
-  // counting has no entry for the charges it counted before. The oldest bucket is
-  // the day counting started, which is what separates those from history that was
-  // never counted at all.
-  let since = countedSince
-  if (!since) {
-    since = startedAt(buckets) ?? Date.now()
-    if (epoch === resetEpoch) await chrome.storage.local.set({ countedSince: since })
-  }
+  const { adjustments: corrections } = await chrome.storage.local.get({ adjustments: {} })
   const note = (o) => {
     journal.push(keyFor(o))
-    // Totals ride on the same write as the journal, so an order can never be
-    // counted twice: whatever survives a worker death is exactly what was
-    // already delivered.
     return epoch === resetEpoch
-      ? chrome.storage.local.set({ delivered: journal, totals: buckets, counted: charged })
+      ? chrome.storage.local.set({ delivered: journal })
       : Promise.resolve()
   }
 
-  // Whether an order's money actually reaches the amount rather than being
-  // tallied as unconverted. Only that may be vouched for: remembering a charge
-  // that added nothing would have its refund subtract a figure no bucket ever
-  // received.
-  const lands = (o) => {
-    const net = estimatedNet(o, fx)
-    return Boolean(net && fx.currency && net.currency === fx.currency)
-  }
-
-  // A page carries each order once, under whatever state it is in now, so a
-  // charge and its own reversal normally arrive in different runs. Should one run
-  // hold both, it has to net to zero whichever is reached first — and plan()
-  // hands the overflow tail back newest-first — so this run's own charges count
-  // as matches alongside the stored ones.
-  const here = new Map(
-    [...batch, ...overflow]
-      .filter((o) => o.state !== 'refunded' && lands(o))
-      .map((o) => [o.id, estimatedNet(o, fx).amount]),
-  )
-
-  // Exactly what the charge put in, negated. With no entry to go on — a charge
-  // counted before the ledger existed — the estimate stands in, but only for a
-  // charge from after counting started: older than that and nothing was ever
-  // added for it to take back out.
-  const reversal = (o) => {
-    const added = amountFor(charged, o.id, fx.currency) ?? here.get(o.id) ?? null
-    if (added != null) return { currency: fx.currency, amount: -added }
-    return o.at >= since ? estimatedNet(o, fx) : null
-  }
-
-  // Counted before the message is rendered, so the footer includes the order it
-  // is attached to. Muted orders are left out on purpose — a total the reader
-  // cannot reconcile against the messages they were sent is worse than none.
+  // The running footer, folded in memory as the batch goes out. The orders are
+  // already in the store, so this could be read back for every message — but
+  // then every message in a batch would carry the same final figure, and the
+  // point of the footer is what the day stood at when that order landed.
   //
-  // Filed under the day Play stamped the order, not the day it was announced. The
-  // two differ only for an order that surfaced late or crossed midnight, and that
-  // order does then miss the footer attached to it — but /recount answers by the
-  // stamped day, and a figure that cannot be checked against Play is worth less
-  // than one that misses a midnight straggler.
+  // Filed under the day Play stamped the order, not the day it was announced.
+  // The two differ only for an order that surfaced late or crossed midnight, and
+  // that order does then miss the footer attached to it — but /recount answers
+  // by the stamped day, and a figure that cannot be checked against Play is
+  // worth less than one that misses a midnight straggler.
   //
-  // A reversal may only take out what a charge put in, so a refund with no charge
-  // to match is left out of the amount and disclosed as such: driving the day
-  // negative for money the tally never saw arrive is the worse answer. The entry
-  // is banked on the same write as the bucket it went into, so a run that dies
-  // half-way cannot leave a charge vouched for that was never counted.
-  const count = (o) => {
-    const refund = o.state === 'refunded'
-    const net = refund ? reversal(o) : estimatedNet(o, fx)
-    // Flagged as a guess when Play has not settled it yet, so the pass below
-    // knows which figures are still waiting on a real one.
-    if (!refund && lands(o)) {
-      charged = rememberCharge(charged, o.id, { ...net, estimated: !isSettled(o) })
-    }
-    buckets = trimTotals(
-      tally(buckets, dayKey(o.at, zone), {
-        net, refund, currency: fx.currency,
-        // The currency the buyer actually paid in, which is the one a question
-        // about a country's sales is really about. Read off the order even for a
-        // reversal, where only the code is trustworthy.
-        from: o.net?.currency,
-        // And what kind of sale it was, so "how many renewals last month" is a
-        // question the tally can answer rather than one it has to re-fetch Play
-        // to guess at.
-        kind: kindOf(o),
-      }),
-    )
+  // Folded from the store as it stood before this run's write, with the orders
+  // about to be announced taken out. A run that stored an order and then failed
+  // to send it leaves that order in the store and out of `seen`, so the next run
+  // announces it — and a footer folded from the store as it stands would count
+  // it once for being there and once for being announced.
+  const announcing = new Set([...batch, ...overflow].map((o) => o.id))
+  let running = foldDays(kept.filter((o) => !announcing.has(o.id)), zone, fx)
+  const footerFor = (o) => {
+    running = countInto(running, o, zone, fx)
+    return s.showDailyTotal
+      ? totalLine('totalToday', spanOf(running, corrections, 'totalToday', today))
+      : null
   }
 
   try {
     for (const o of batch) {
-      count(o)
-      const footer = s.showDailyTotal
-        ? totalLine('totalToday', spanOf(buckets, corrections, 'totalToday', dayKey(Date.now(), zone)))
-        : null
-      const text = [describe(o, s, fx), footer].filter(Boolean).join('\n')
+      const text = [describe(o, s, fx), footerFor(o)].filter(Boolean).join('\n')
       await sendTelegram(s.botToken, s.chatId, text)
       await record('order', 'logOrder', o.product || o.id, o.state)
       await note(o)
@@ -1161,10 +1025,7 @@ async function onSuccess(s, all) {
       await sendTelegram(s.botToken, s.chatId, label(s, t('tgMore', overflow.length)))
       // Only once that notice is out may the tail be written off. Banking it
       // first buried orders the user was never told existed.
-      for (const o of overflow) {
-        count(o)
-        await note(o)
-      }
+      for (const o of overflow) await note(o)
     }
   } catch (err) {
     // A reset landed mid-run; recording failure state would re-dirty the slate
@@ -1176,7 +1037,11 @@ async function onSuccess(s, all) {
   for (const key of journal) seen.add(key)
   await write({ fails: 0, lastOkAt: Date.now() })
 
-  await putRight({ all, fx, seen, since, buckets, charged, epoch, settings: s })
+  // Said once, after the batch, so it cannot be mistaken for one of the orders
+  // just announced.
+  await announceDrift(settled, drift, s)
+  // Months older than the tally can report on at all.
+  await forgetOldOrders(today)
 
   await record(
     'info',

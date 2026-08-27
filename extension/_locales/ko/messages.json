@@ -198,7 +198,7 @@
     "message": "카칭이 연결됐습니다."
   },
   "tgFirstSync": {
-    "message": "카칭 시작됨. 최근 $2 일 주문 $1 건을 기록했습니다. 지금부터 새 주문만 알립니다."
+    "message": "카칭 시작됨. 최근 $2 일 주문 $1 건을 기록했고 누계에 반영했습니다. 지금부터 새 주문만 알립니다."
   },
   "tgRecovered": {
     "message": "카칭 복구됨."
@@ -365,23 +365,14 @@
   "totalRecountReached": {
     "message": "$1 까지만 거슬러 갔습니다 — 그 이전은 기간을 따로 지정해 주세요"
   },
-  "totalRecountMoved": {
-    "message": "$1 만큼 정정"
-  },
   "totalRecountMovedDays": {
     "message": "$1일 변경, 합계 $2"
   },
   "totalRecountAdopted": {
     "message": "이전에 없던 $1건 반영"
   },
-  "totalRecountCleared": {
-    "message": "/adjust 보정 $1일분은 대체되어 해제"
-  },
-  "totalRecountSame": {
-    "message": "변동 없음"
-  },
   "totalRecountUntouched": {
-    "message": "그 기간에 공지된 주문이 없어 그대로 두었습니다"
+    "message": "변동 없음"
   },
   "cmdAdjust": {
     "message": "특정 날짜 누계를 금액으로 보정 (+ 또는 -)"

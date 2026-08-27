@@ -16,8 +16,27 @@ const messages = JSON.parse(fs.readFileSync(path.join(EXT, '_locales/en/messages
 // Storage is stubbed per test by whatever needs it; the default is an install
 // that has never counted anything.
 let storage = {}
+// Faithful enough to be worth testing against: get honours the keys it was
+// asked for, so a module that reads one month's chunk cannot accidentally be
+// handed every other key in storage and pass on that.
+const local = {
+  get: async (want) => {
+    if (want == null) return { ...storage }
+    const out = {}
+    for (const [key, fallback] of Object.entries(want)) {
+      out[key] = key in storage ? storage[key] : fallback
+    }
+    return out
+  },
+  set: async (patch) => {
+    storage = { ...storage, ...patch }
+  },
+  remove: async (keys) => {
+    for (const key of [keys].flat()) delete storage[key]
+  },
+}
 globalThis.chrome = {
-  storage: { local: { get: async (defaults) => ({ ...defaults, ...storage }) } },
+  storage: { local },
   i18n: {
     getMessage: (key, subs = []) => {
       const raw = messages[key]?.message
@@ -38,6 +57,7 @@ const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('healt
 const { ratesFrom, merge, payoutCurrency, convert, rateFor } = await load('fx.js')
 const T = await load('totals.js')
 const { chatsIn, menuFingerprint, MENU } = await load('telegram.js')
+const O = await load('orders.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, byKind, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
@@ -863,36 +883,6 @@ test('a refund comes back out of the running total', () => {
   })
 })
 
-test('the charge ledger keeps what each charge added, and evicts the oldest', () => {
-  // A reversal takes out exactly what its charge put in, so the amount is kept
-  // beside the id — an unsettled reversal re-estimated at the default fee rate
-  // would not cancel a charge counted from Play's reported payout.
-  const krw = (amount) => ({ currency: 'KRW', amount })
-  let led = []
-  for (const [id, amount] of [['a', 10], ['b', 20], ['a', 99], ['c', 30]]) {
-    led = T.remember(led, id, krw(amount), 3)
-  }
-  assert.deepEqual(led, [['a', 10, 'KRW'], ['b', 20, 'KRW'], ['c', 30, 'KRW']])
-  assert.equal(T.amountFor(led, 'b', 'KRW'), 20)
-  assert.equal(T.amountFor(led, 'zz', 'KRW'), null)
-  // A figure counted in one payout currency is not taken out of a total kept in
-  // another.
-  assert.equal(T.amountFor(led, 'b', 'USD'), null)
-  // Already present is a no-op, not a re-append that would push out a live entry
-  // and overwrite the figure with a later estimate of the same order.
-  assert.equal(T.remember(led, 'a', krw(99), 3), led)
-  assert.deepEqual(T.remember(led, 'd', krw(40), 3), [['b', 20, 'KRW'], ['c', 30, 'KRW'], ['d', 40, 'KRW']])
-})
-
-test('a zero entry matches whatever currency the total is now kept in', () => {
-  // First sync banks the history it adopted at zero, before any rate has been
-  // learned and so before the payout currency is known. That entry still has to
-  // match, or the refund of an adopted order falls through to an estimate of
-  // money the totals never received.
-  const led = T.remember([], 'a', { currency: null, amount: 0 })
-  assert.equal(T.amountFor(led, 'a', 'KRW'), 0)
-})
-
 test('startedAt reads the day counting began off the buckets', () => {
   // The ledger shipped after the totals did, so this is what tells a refund of a
   // charge counted by the older build from a refund of history nothing counted.
@@ -1612,21 +1602,6 @@ test('a range narrows the split without narrowing what it claims to cover', () =
   assert.equal(byCurrency(totals, adjustments, { from: '2020-01-01' }, '2026-08-25').from, '2026-06-01')
 })
 
-test('days recorded before the split say so rather than reading as a quiet month', () => {
-  // An install that was counting before this shipped has buckets with no split
-  // in them. Their money is in the daily totals and in none of the rows, so a
-  // figure quoted from here without saying so would read as a currency that
-  // sold nothing.
-  const { totals } = mixed()
-  const old = { ...totals, '2026-06-01': { currency: 'KRW', amount: 12000, orders: 1, refunds: 0, refunded: 0, uncounted: 0 } }
-  const out = byCurrency(old, {}, {}, '2026-08-25')
-  assert.equal(out.daysNotSplit, 1)
-  assert.match(out.note, /before/)
-  // And a tally that has been split throughout says nothing, rather than
-  // hedging an answer that is whole.
-  assert.equal(byCurrency(totals, {}, {}, '2026-08-25').daysNotSplit, undefined)
-})
-
 test('the currency read refuses the same things the daily one does', () => {
   const { totals, adjustments } = mixed()
   // Shape is not existence here either: April has thirty days.
@@ -1696,15 +1671,12 @@ test('how many renewals, and what they were worth, is one read', () => {
     out.kinds.reduce((n, k) => n + k.amount, 0),
   )
 
-  // A day written before the split existed is money in the daily totals and in
-  // none of the rows. Saying so is what keeps a quoted row from reading as a
-  // kind that sold nothing rather than one this cannot account for.
-  const older = { ...b, '2026-08-05': { currency: 'KRW', amount: 9000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } }
-  const gap = byKind(older, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28')
-  assert.equal(gap.daysNotSplit, 1)
-  assert.match(gap.note, /recount/)
-  // And the currency split reports the same day as its own gap, not this one's.
-  assert.equal(byCurrency(older, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-08-28').daysNotSplit, 1)
+  // There is no "these days predate the split" gap to report any more. A day is
+  // folded out of the orders on the way to being read, so every day this can see
+  // carries every split — which is the point of keeping the orders rather than a
+  // running total.
+  assert.equal('daysNotSplit' in out, false)
+  assert.equal('note' in out, false)
 })
 
 test('the model is offered both splits alongside the daily read', () => {
@@ -1815,91 +1787,323 @@ test('a menu that gained a command reaches installs that already had one', () =>
   }
 })
 
-test('an order Play has not settled is banked as a guess, and says so', () => {
-  // The distinction is the whole point: a guess has to be revisited when Play
-  // fills the real number in, and a reported figure does not.
+test('a settled order is told apart from one whose figure is a guess', () => {
+  // The distinction is what makes the store self-correcting: a guess is stored
+  // as the order Play gave, and when Play fills the real figure in, the same
+  // order is stored again and the day is folded from it. Nothing has to remember
+  // that the old figure was a guess, but the line still has to know.
   const charged = order({ net: null, payout: null, total: { currency: 'KRW', amount: 400 } })
   assert.equal(isSettled(charged), false)
   assert.equal(isSettled(order({ payout: { currency: 'KRW', amount: 2500 } })), true)
   // Play reporting the buyer-currency net but not the payout still counts: that
   // figure is Play's, not this module's arithmetic on the price.
   assert.equal(isSettled(order({ payout: null, net: { currency: 'USD', amount: 3 } })), true)
-
-  let led = T.remember([], 'a', { currency: 'KRW', amount: 340, estimated: true })
-  led = T.remember(led, 'b', { currency: 'KRW', amount: 8000 })
-  assert.equal(T.isEstimate(led, 'a'), true)
-  assert.equal(T.isEstimate(led, 'b'), false)
-  // An entry written before the flag existed reads as settled and is left to
-  // /recount rather than corrected on a guess about how it was counted.
-  assert.equal(T.isEstimate([['c', 500, 'KRW']], 'c'), false)
-  // The flag does not disturb what a reversal takes back out.
-  assert.equal(T.amountFor(led, 'a', 'KRW'), 340)
 })
 
-test('a figure Play settles later moves the day without counting the order again', () => {
-  // 당근벨: the buyer is charged 400 because Google funds the discount, and the
-  // developer banks 2,500. Counted at announce time from the 400, the tally
-  // would carry that for good — nothing re-announces an order Play merely
-  // settled, so nothing else would ever revisit it.
-  let buckets = T.record({}, '2026-08-23', {
-    net: { currency: 'KRW', amount: 340 }, currency: 'KRW', from: 'KRW',
-  })
-  const before = T.sum(buckets, '2026-08-23')
-  assert.equal(before.amount, 340)
+const KRW = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
+const stored = (x) => ({
+  id: 'GPA.1', state: 'charged', subscription: false, product: '', sku: 'p',
+  packageName: 'com.example.app', country: 'KR', at: Date.UTC(2026, 7, 22, 3, 0),
+  total: { currency: 'KRW', amount: 6500 }, beforeFee: null, tax: null,
+  net: null, payout: { currency: 'KRW', amount: 6500 }, ...x,
+})
 
-  buckets = T.resettle(buckets, '2026-08-23', { currency: 'KRW' }, 2500 - 340)
-  const after = T.sum(buckets, '2026-08-23')
-  assert.equal(after.amount, 2500)
+test('the same order stored twice is one order, at whichever version came last', () => {
+  // Play returns an order under the state it is in now and fills its payout in
+  // days later, so the same id comes back changed. Merging on the id rather than
+  // appending is what makes storing an order idempotent — which is what lets a
+  // poll and a /recount overlap without either counting anything twice.
+  const guess = stored({ payout: null, net: null, total: { currency: 'KRW', amount: 400 } })
+  const settled = stored({ payout: { currency: 'KRW', amount: 2500 } })
+  const kept = O.merge([guess], [settled])
+  assert.equal(kept.length, 1)
+  assert.equal(kept[0].payout.amount, 2500)
+  // Order does not matter for identity, only for which version wins.
+  assert.equal(O.merge([settled], [guess])[0].payout, null)
+  // A pending order is not stored at all, or it would sit in the tally as a sale
+  // that has not happened.
+  assert.deepEqual(O.merge([], [stored({ state: 'pending' })]), [])
+})
+
+test('a figure Play settles later moves the day, and nothing else does', () => {
+  // 당근벨: the buyer is charged 400 because Google funds the discount, and the
+  // developer banks 2,500. Counted from the price at announce time, the day
+  // carried 340 — and nothing re-announces an order Play merely settled, so it
+  // would have carried it for good.
+  //
+  // This used to take a ledger of what each charge had added, a flag marking
+  // which figures were guesses, and a pass that moved the difference into the
+  // bucket by hand. Now the settled order replaces the guess in the store and
+  // the day is folded again.
+  const guess = stored({ payout: null, net: null, total: { currency: 'KRW', amount: 400 } })
+  const before = O.foldDays([guess], 'UTC', KRW)
+  assert.equal(T.sum(before, '2026-08-22').amount, 340)
+
+  const after = O.foldDays(O.merge([guess], [stored({ payout: { currency: 'KRW', amount: 2500 } })]), 'UTC', KRW)
+  const day = T.sum(after, '2026-08-22')
+  assert.equal(day.amount, 2500)
   // One order, still. Nothing new happened; the same order turned out to be
   // worth a different figure.
-  assert.equal(after.orders, before.orders)
-  assert.equal(after.refunds, before.refunds)
-  // And the split moves with it, or it stops adding up to the day it came from.
-  assert.equal(after.currencies.KRW.amount, 2500)
-  assert.equal(
-    Object.values(after.currencies).reduce((n, c) => n + c.amount, 0),
-    after.amount,
-  )
-
-  // Confirmed in the ledger, so a refund takes out what was actually counted —
-  // 2,500, not the 340 the tally first guessed at.
-  let led = T.remember([], 'a', { currency: 'KRW', amount: 340, estimated: true })
-  led = T.confirm(led, 'a', 2500)
-  assert.equal(T.amountFor(led, 'a', 'KRW'), 2500)
-  // And it stops being a guess, so a settled figure that merely wobbles with the
-  // exchange rate is not "corrected" every poll for the rest of its life.
-  assert.equal(T.isEstimate(led, 'a'), false)
+  assert.equal(day.orders, 1)
+  assert.equal(day.refunds, 0)
+  // And every split moves with it, because every split is folded from the same
+  // order rather than patched afterwards.
+  assert.equal(day.currencies['?'].amount, 2500)
+  assert.equal(day.kinds.buy.amount, 2500)
 })
 
-test('a settlement keeps the split adding up, or leaves it visibly absent', () => {
-  // A day that has a split but no row for this currency gets one, or moving the
-  // amount and not the split would have the two disagree.
-  let split = T.record({}, '2026-08-23', { net: { currency: 'KRW', amount: 900 }, currency: 'KRW', from: 'USD' })
-  split = T.resettle(split, '2026-08-23', { currency: 'JPY' }, 2160)
-  const both = T.sum(split, '2026-08-23')
-  assert.equal(both.amount, 3060)
-  assert.equal(Object.values(both.currencies).reduce((n, c) => n + c.amount, 0), both.amount)
-  // No order invented for it: the count belongs to the day, which has it.
-  assert.equal(both.currencies.JPY.orders, 0)
+test('an order survives the poll that fetched it, and is read back by day', async () => {
+  storage = {}
+  const at = (iso) => Date.parse(iso)
+  const seoul = 'Asia/Seoul'
+  // Two orders on the same Seoul day, either side of UTC midnight — so one of
+  // them lands in the July chunk while both belong to the August 1st bucket.
+  const july = stored({ id: 'a', at: at('2026-07-31T16:00:00Z') })
+  const august = stored({ id: 'b', at: at('2026-08-01T05:00:00Z') })
+  await O.write([july, august], seoul)
+  assert.deepEqual(Object.keys(storage).sort(), ['orders:2026-08'])
 
-  // A bucket from before the split existed gets no row at all. One here could
-  // only hold this correction and not the money it corrects, and the day would
-  // stop being reported as unsplit while still being short by everything else.
-  // A gap that says it is a gap beats one that has been papered over.
-  const before = { '2026-08-23': { currency: 'KRW', amount: 340, orders: 1, refunds: 0, refunded: 0, uncounted: 0 } }
-  const put = T.resettle(before, '2026-08-23', { currency: 'KRW' }, 2160)
-  assert.equal(T.sum(put, '2026-08-23').amount, 2500)
-  assert.equal(T.hasBreakdown(put['2026-08-23']), false)
+  // Both come back for the day they actually fall on, whichever chunk holds
+  // them: the range is in the reader's zone and the chunk boundary is not.
+  const day = await O.read('2026-08-01', '2026-08-01', seoul)
+  assert.deepEqual(day.map((o) => o.id), ['a', 'b'])
+  // And under UTC they are two different days, from the same stored bytes.
+  assert.deepEqual((await O.read('2026-07-31', '2026-07-31', 'UTC')).map((o) => o.id), ['a'])
+
+  // Change the zone and the same order now belongs in a different month. It must
+  // not end up in both: merge() dedupes inside a chunk, so a second home would
+  // be a second copy that every read unions and every fold counts twice, for
+  // good. The write takes it out of the chunk it used to live in.
+  await O.write([july], 'UTC')
+  assert.deepEqual(Object.keys(storage).sort(), ['orders:2026-07', 'orders:2026-08'])
+  assert.deepEqual(storage['orders:2026-08'].map((o) => o.id), ['b'])
+  assert.deepEqual((await O.read('2026-07-31', '2026-08-01', 'UTC')).map((o) => o.id), ['a', 'b'])
+  // And a store that already holds both copies — written before this repaired
+  // itself — is still read as one order, favouring the chunk the order belongs
+  // in now, because that is where the newest write went.
+  storage['orders:2026-08'] = [july, ...storage['orders:2026-08']]
+  assert.deepEqual((await O.read('2026-08-01', '2026-08-01', seoul)).map((o) => o.id), ['a', 'b'])
+  assert.deepEqual((await O.readAll(seoul)).map((o) => o.id), ['a', 'b'])
+  await O.write([july, august], seoul)
+
+  // Storing the same order again replaces it rather than doubling the day.
+  await O.write([{ ...august, payout: { currency: 'KRW', amount: 9000 } }], seoul)
+  const again = await O.read('2026-08-01', '2026-08-01', seoul)
+  assert.equal(again.length, 2)
+  assert.equal(again.find((o) => o.id === 'b').payout.amount, 9000)
+  assert.equal(T.sum(O.foldDays(again, seoul, KRW), '2026-08-01').orders, 2)
+
+  // A month past the window is dropped whole; the months still in it are not.
+  storage['orders:2019-01'] = [stored({ id: 'old', at: at('2019-01-05T00:00:00Z') })]
+  assert.deepEqual(await O.forget('2026-08-28'), ['orders:2019-01'])
+  assert.ok('orders:2026-08' in storage)
+  // And it looks once a day. Listing every key reads the whole store back, which
+  // is megabytes on a poll that runs every ten minutes to delete something that
+  // can only go stale at midnight.
+  storage['orders:2019-02'] = []
+  assert.deepEqual(await O.forget('2026-08-28'), [])
+  assert.ok('orders:2019-02' in storage)
+  assert.deepEqual(await O.forget('2026-08-29'), ['orders:2019-02'])
+  storage = {}
 })
 
-test('a day the bucket window has dropped is not resurrected by a settlement', () => {
-  // Putting it back would stand a single order up as if it were the whole day's
-  // takings, on a day the tally has already stopped answering for.
-  assert.deepEqual(T.resettle({}, '2024-01-01', { currency: 'KRW' }, 2160), {})
-  // And a settlement that moved nothing leaves the object identical, so the
-  // caller can tell "nothing happened" from "something did".
-  const one = T.record({}, '2026-08-23', { net: { currency: 'KRW', amount: 340 }, currency: 'KRW' })
-  assert.equal(T.resettle(one, '2026-08-23', { currency: 'KRW' }, 0), one)
+test('a refunded order folds to the charge and the reversal it was', () => {
+  // Play returns an order once, under the state it is in now, so a refunded one
+  // arrives as the reversal alone. The charge happened too, and a reversal is
+  // filed under the day of the order rather than the day of the refund — so both
+  // belong to the same day. Counting only the minus leaves the day short by a
+  // charge it did receive.
+  const back = O.foldDays([stored({ state: 'refunded' })], 'UTC', KRW)
+  const day = T.sum(back, '2026-08-22')
+  assert.equal(day.amount, 0)
+  assert.equal(day.orders, 1)
+  assert.equal(day.refunds, 1)
+  assert.equal(day.refunded, -6500)
+  // A day that netted to zero must not read as one that never sold anything,
+  // and the splits have to say the same or a currency question about that day
+  // disagrees with the day itself.
+  assert.equal(day.currencies['?'].refunded, -6500)
+  assert.equal(day.kinds.buy.orders, 1)
+
+  // The refund takes out exactly what the charge put in, because it is the same
+  // order read twice rather than two figures estimated apart.
+  const charge = T.sum(O.foldDays([stored({})], 'UTC', KRW), '2026-08-22')
+  assert.equal(charge.amount + day.refunded, 0)
+})
+
+test('folding the whole history stays linear in the number of orders', () => {
+  // Every question the model asks folds the entire store, so this runs on a
+  // read, not on a write. record() copies the map of days on every call, which
+  // over three years of orders against three and a half thousand days is forty
+  // million entry copies — four seconds inside a service worker, for a figure
+  // that should be instant. recordInto writes into one accumulator instead.
+  //
+  // Measured as a ratio rather than against a clock: what matters is that
+  // tripling the orders roughly triples the work instead of squaring it, and a
+  // wall-clock threshold would only be a test that fails on a slow machine.
+  // Spread thin, three to a day, because the cost being measured is orders times
+  // distinct days: nine thousand orders piled onto one week would copy a map of
+  // seven keys and look linear however it was written.
+  const build = (n) =>
+    Array.from({ length: n }, (_, i) => stored({
+      id: `GPA.${i}`,
+      at: Date.UTC(2020, 0, 1) + i * 28_800_000,
+      payout: { currency: 'KRW', amount: 5000 },
+    }))
+  const time = (orders) => {
+    const at = process.hrtime.bigint()
+    O.foldDays(orders, 'UTC', KRW)
+    return Number(process.hrtime.bigint() - at)
+  }
+  const small = build(1_000)
+  const large = build(9_000)
+  // Warm, so the first run's compilation is not the thing being measured.
+  time(small)
+  time(large)
+  const ratio = time(large) / Math.max(time(small), 1)
+  // Nine times the orders. Linear is about 9; the quadratic version was 80-odd.
+  assert.ok(ratio < 30, `folding got superlinear: 9x the orders cost ${ratio.toFixed(1)}x`)
+
+  // And it is still the same fold: one accumulator, every order counted once.
+  const days = O.foldDays(build(24), 'UTC', KRW)
+  assert.equal(T.sum(days, '2020-01-01').orders, 3)
+  assert.equal(T.sum(days, '2020-01').orders, 24)
+  assert.equal(T.sum(days, '2020-01').amount, 24 * 5000)
+})
+
+// ---------------------------------------------------------------- the poll itself
+//
+// background.js has never been exercised here: it registers listeners on import
+// and talks to Play and Telegram, so testing it meant stubbing the browser. The
+// stub below is worth it now that a poll is what writes the tally — the fold, the
+// announcement and the store all have to agree, and no test of any one of them
+// catches the case where a run stores an order and then fails to send it.
+async function pollHarness({ orders, failSends = 0 }) {
+  const sent = []
+  const now = Date.now()
+  const play = orders.map((o) => ({
+    '1': o.id, '33': o.state === 'refunded' ? 4 : 2, '12': o.sub ? 3 : 1,
+    '11': { '1': 'Pro', '2': 'pro' }, '13': 'com.example.app', '14': { '2': 'KR' },
+    '15': { '1': 'KRW', '2': String(o.total ?? o.net) },
+    '27': o.net == null ? undefined : { '1': 'KRW', '2': String(o.net) },
+    '28': o.net == null ? undefined : { '1': 'KRW', '2': String(o.net) },
+    '9': String(o.at), '7': [],
+  }))
+  let left = failSends
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('sendMessage')) {
+      if (left > 0) {
+        left -= 1
+        return { ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }
+      }
+      sent.push(JSON.parse(init.body).text)
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 1 } }) }
+    }
+    const body = JSON.parse(init.body)
+    const from = Number(body['4']['1']['1']) * 1000
+    const to = Number(body['4']['2']['1']) * 1000
+    return {
+      ok: true, status: 200,
+      json: async () => ({ '1': play.filter((_, i) => orders[i].at >= from && orders[i].at < to) }),
+    }
+  }
+  await background.poll().catch(() => {})
+  return { sent, now }
+}
+
+const noop = () => {}
+globalThis.chrome.alarms = { create: noop, clear: noop, getAll: async () => [], onAlarm: { addListener: noop } }
+globalThis.chrome.runtime = {
+  getURL: (x) => `chrome-extension://kaching/${x}`,
+  onInstalled: { addListener: noop }, onStartup: { addListener: noop },
+  onMessage: { addListener: noop }, openOptionsPage: noop,
+}
+globalThis.chrome.action = {
+  onClicked: { addListener: noop }, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {},
+}
+globalThis.chrome.cookies = { get: async () => ({ value: 'SAPISID' }) }
+globalThis.chrome.permissions = { contains: async () => true }
+const background = await load('background.js')
+
+test('an order stored by a run that could not send it is announced once, and counted once', async () => {
+  const zone = 'UTC'
+  storage = {
+    botToken: 'b', chatId: '1', developerId: '1', timeZone: zone, days: 30,
+    bootstrapped: true, seen: [], delivered: [], payoutCurrency: 'KRW', rates: {},
+    consoleUrl: 'https://play.google.com/console/u/0/developers/1/orders',
+  }
+  const at = Date.now() - 3_600_000
+  const orders = [{ id: 'A', at, net: 5000 }, { id: 'B', at: at + 60_000, net: 3000 }]
+
+  // The send fails, so nothing is announced — but the orders are already stored,
+  // because storing is what counting is now.
+  const first = await pollHarness({ orders, failSends: 1 })
+  assert.deepEqual(first.sent, [])
+  assert.equal((await O.readAll(zone)).length, 2)
+
+  // The next run announces both, exactly once each. The footer is the day so far
+  // including the order it hangs under — so it has to count each order once, not
+  // once for already being in the store and again for being announced.
+  const second = await pollHarness({ orders })
+  const footers = second.sent.map((text) => text.split('\n').at(-1))
+  assert.deepEqual(footers, ['Today 1 order · KRW 3,000', 'Today 2 orders · KRW 8,000'])
+
+  const today = T.dayKey(Date.now(), zone)
+  const day = T.sum(O.foldDays(await O.readAll(zone), zone, { currency: 'KRW', rates: {} }), today)
+  assert.equal(day.amount, 8000)
+  assert.equal(day.orders, 2)
+
+  // And a third run announces nothing and changes nothing.
+  const third = await pollHarness({ orders })
+  assert.deepEqual(third.sent, [])
+  assert.equal(T.sum(O.foldDays(await O.readAll(zone), zone, { currency: 'KRW', rates: {} }), today).amount, 8000)
+  storage = {}
+})
+
+test('a payout Play settles later moves the day, with nothing re-announced', async () => {
+  const zone = 'UTC'
+  storage = {
+    botToken: 'b', chatId: '1', developerId: '1', timeZone: zone, days: 30,
+    bootstrapped: true, seen: [], delivered: [], payoutCurrency: 'KRW', rates: {},
+    consoleUrl: 'https://play.google.com/console/u/0/developers/1/orders',
+  }
+  const at = Date.now() - 3_600_000
+  const today = T.dayKey(Date.now(), zone)
+  const amount = () =>
+    T.sum(O.foldDays(storage['orders:' + today.slice(0, 7)] ?? [], zone, { currency: 'KRW', rates: {} }), today).amount
+
+  // 당근벨: the buyer is charged 400 because Google funds the discount, so the
+  // day is counted at 340 — the price less the standard cut.
+  await pollHarness({ orders: [{ id: 'A', at, total: 400, net: null }] })
+  assert.equal(amount(), 340)
+
+  // Play fills the real figure in. Nothing re-announces the order, so this used
+  // to need a ledger of what each charge had added and a pass to move the
+  // difference by hand. Now the order is stored again and the day is refolded.
+  const settled = await pollHarness({ orders: [{ id: 'A', at, total: 400, net: 2500 }] })
+  assert.equal(amount(), 2500)
+  // Said once, because a day's figure that jumps with nothing to explain it is
+  // worse than a line nobody needed.
+  assert.equal(settled.sent.length, 1)
+  assert.match(settled.sent[0], /settled 1 order.*\+2160/)
+  storage = {}
+})
+
+test('the store is read and written one month at a time', () => {
+  assert.equal(O.chunkFor('2026-08-22'), 'orders:2026-08')
+  assert.deepEqual(O.chunksBetween('2026-11-30', '2027-02-01'), [
+    'orders:2026-11', 'orders:2026-12', 'orders:2027-01', 'orders:2027-02',
+  ])
+  assert.deepEqual(O.chunksBetween('2026-08-01', '2026-08-31'), ['orders:2026-08'])
+
+  // Months past the window the tally reaches at all. Whole months, because a
+  // chunk is the unit of storage and half a month deleted out of one leaves a
+  // fold reporting a partial day as a quiet one.
+  const keys = ['orders:2020-01', 'orders:2026-08', 'seen', 'totals', 'adjustments']
+  const gone = O.expired(keys, '2026-08-28')
+  assert.deepEqual(gone, ['orders:2020-01'])
+  // Only order chunks. A key that merely sorts low is not a month.
+  assert.ok(!gone.includes('adjustments'))
 })
 
 test('a rebuild counts a refunded order as the charge and the reversal it was', () => {
@@ -1933,21 +2137,3 @@ test('a rebuild counts a refunded order as the charge and the reversal it was', 
   assert.equal(figures.currencies.KRW.amount, 0)
 })
 
-test('a rebuilt charge is banked at what the rebuild counted', () => {
-  // History adopted at first sync was banked at zero on purpose. Once a recount
-  // has taken it into the books, a reversal of one of those orders has to take
-  // out what is now there — refunding it for nothing would leave the money in
-  // the total for good.
-  const adopted = T.remember([], 'GPA.1', { currency: 'KRW', amount: 0 })
-  assert.equal(T.amountFor(adopted, 'GPA.1', 'KRW'), 0)
-
-  const rebuilt = T.remember(
-    adopted.filter(([id]) => id !== 'GPA.1'),
-    'GPA.1',
-    { currency: 'KRW', amount: 6500, estimated: false },
-  )
-  assert.equal(T.amountFor(rebuilt, 'GPA.1', 'KRW'), 6500)
-  // remember refuses an id it already holds, which is why the rebuild drops the
-  // old entry first — replacing it is the whole point.
-  assert.equal(T.remember(adopted, 'GPA.1', { currency: 'KRW', amount: 6500 }), adopted)
-})

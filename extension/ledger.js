@@ -7,9 +7,11 @@
 // wrong ledger; a wrong read is only a wrong sentence, which the figures quoted
 // beside it give the reader a way to catch.
 import {
-  dayOf, startedAt, shift, sumRange, hasBreakdown, hasKinds, isDay, UNKNOWN_CURRENCY,
+  dayOf, startedAt, shift, sumRange, isDay, UNKNOWN_CURRENCY,
   KIND_BUY, KIND_SUB, KIND_RENEWAL,
 } from './totals.js'
+import { foldDays, readAll } from './orders.js'
+import { load, zoneOf } from './settings.js'
 
 // Long enough for "the last two months", short enough that no single question
 // can pull a year of days into the request. A wider question is answered by
@@ -99,6 +101,12 @@ export function rangeOf(totals, adjustments, { from, to }, today) {
   return { since, days: out }
 }
 
+// There is no "these days predate the split" gap here any more, and no field
+// reporting one. A day is folded out of the orders on the way to being read, so
+// every day this can see carries every split — which is the point of keeping the
+// orders rather than a running total: a question nobody had thought of yet is
+// answerable over all of history the moment it is written.
+//
 // The same money as above, dealt into piles: by the currency the buyer paid in,
 // or by what kind of sale it was. Over any span at all — no day cap here,
 // because the answer is one row per pile rather than one per day, so a question
@@ -114,7 +122,7 @@ export function rangeOf(totals, adjustments, { from, to }, today) {
 // One function for both because the two splits are the same shape and the same
 // arithmetic; a second copy of this is how one of them would start reporting a
 // correction, or a gap, that the other did not.
-function splitBy({ field, rows: label, row: one, whole }, totals, adjustments, { from, to } = {}, today) {
+function splitBy({ field, rows: label, row: one }, totals, adjustments, { from, to } = {}, today) {
   // Both ends optional, and both default to the widest honest answer: omitted,
   // the question is "all of it", which is the common one and should not cost the
   // model a turn spent guessing an install date it has not been told.
@@ -146,14 +154,6 @@ function splitBy({ field, rows: label, row: one, whole }, totals, adjustments, {
     // which parts of it matter, and the tail is the part that can be skimmed.
     .sort((a, b) => b.amount - a.amount)
 
-  // Days recorded before this split existed. Their money is in the daily totals
-  // and in none of the rows above, so a figure quoted from here without saying
-  // so would read as a pile that earned nothing rather than as one this cannot
-  // yet account for.
-  const blind = Object.keys(totals).filter(
-    (day) => day >= first && day <= last && !whole(totals[day]),
-  ).length
-
   return {
     since,
     from: first,
@@ -164,12 +164,6 @@ function splitBy({ field, rows: label, row: one, whole }, totals, adjustments, {
     // they are named apart rather than folded into one of the rows. The rows
     // plus this is the day total; the rows alone are not.
     ...(corrected.amount ? { corrections: corrected.amount } : {}),
-    ...(blind
-      ? {
-          daysNotSplit: blind,
-          note: `${blind} day(s) in this range were recorded before this split existed; their money is in the daily totals but in none of the rows above. A /recount of those days fills them in`,
-        }
-      : {}),
   }
 }
 
@@ -179,13 +173,13 @@ function splitBy({ field, rows: label, row: one, whole }, totals, adjustments, {
 // worse than two words.
 export const byCurrency = (totals, adjustments, range, today) =>
   splitBy(
-    { field: 'currencies', rows: 'currencies', row: 'currency', whole: hasBreakdown },
+    { field: 'currencies', rows: 'currencies', row: 'currency' },
     totals, adjustments, range, today,
   )
 
 export const byKind = (totals, adjustments, range, today) =>
   splitBy(
-    { field: 'kinds', rows: 'kinds', row: 'kind', whole: hasKinds },
+    { field: 'kinds', rows: 'kinds', row: 'kind' },
     totals, adjustments, range, today,
   )
 
@@ -230,8 +224,7 @@ const READ_BY_CURRENCY = {
     'short by them. A row with currency "' +
     UNKNOWN_CURRENCY +
     '" is orders whose buyer currency Play did not report. "corrections" is /adjust ' +
-    'entries, which belong to no buyer and are in no row. If "daysNotSplit" is present, ' +
-    'say the figure is incomplete and why.',
+    'entries, which belong to no buyer and are in no row.',
   parameters: {
     type: 'object',
     properties: {
@@ -267,8 +260,7 @@ const READ_BY_KIND = {
     'charges — for renewals that IS the number of renewals; "refunds" counts reversals ' +
     'and is not in "orders"; "refunded" is what they were worth, negative; "uncounted" is ' +
     'orders that could not be converted, so that row is short by them. "corrections" is ' +
-    '/adjust entries, which belong to no kind and are in no row. If "daysNotSplit" is ' +
-    'present, say the figure is incomplete and why.',
+    '/adjust entries, which belong to no kind and are in no row.',
   parameters: {
     type: 'object',
     properties: {
@@ -280,7 +272,26 @@ const READ_BY_KIND = {
   },
 }
 
-const stored = () => chrome.storage.local.get({ totals: {}, adjustments: {} })
+// Folded fresh on every call rather than handed in once. A question may take
+// several turns, and a poll landing an order in the middle of one should be
+// answered from what is in storage now, not from a copy taken before it arrived.
+//
+// The whole store, not a range: a question about one currency or one kind of
+// sale has no range at all, and the model should not have to guess an install
+// date to ask for. Three years of orders is under half a megabyte and folds in
+// single-digit milliseconds, which is cheaper than the turn it would cost to
+// find out how far back to look.
+const stored = async () => {
+  const settings = await load()
+  const { adjustments, rates, payoutCurrency } = await chrome.storage.local.get({
+    adjustments: {}, rates: {}, payoutCurrency: null,
+  })
+  const zone = zoneOf(settings)
+  return {
+    totals: foldDays(await readAll(zone), zone, { currency: payoutCurrency, rates }),
+    adjustments,
+  }
+}
 
 export const tools = (today) => [
   {

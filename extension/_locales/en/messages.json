@@ -198,7 +198,7 @@
     "message": "Kaching is connected."
   },
   "tgFirstSync": {
-    "message": "Kaching started. Recorded $1 orders from the last $2 days. Only new ones will be announced from now on."
+    "message": "Kaching started. Recorded $1 orders from the last $2 days, which the totals now count. Only new ones will be announced from now on."
   },
   "tgRecovered": {
     "message": "Kaching recovered."
@@ -365,23 +365,14 @@
   "totalRecountReached": {
     "message": "only reached back to $1 — ask for anything earlier as its own period"
   },
-  "totalRecountMoved": {
-    "message": "was $1"
-  },
   "totalRecountMovedDays": {
     "message": "$1 days moved, $2 in all"
   },
   "totalRecountAdopted": {
     "message": "$1 not previously counted"
   },
-  "totalRecountCleared": {
-    "message": "$1 day(s) of /adjust corrections dropped as superseded"
-  },
-  "totalRecountSame": {
-    "message": "already matched"
-  },
   "totalRecountUntouched": {
-    "message": "nothing announced there, so it was left alone"
+    "message": "nothing changed"
   },
   "cmdAdjust": {
     "message": "Correct a day's total by an amount, + or -"

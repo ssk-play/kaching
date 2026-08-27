@@ -94,6 +94,14 @@ conversation never reaches it. That stops being true if the bot is made a group
 administrator, or if privacy mode is turned off in @BotFather: then the whole
 group's chatter goes to that service on your key, and nothing here rate-limits it.
 
+The orders themselves are what is kept — one storage entry per month, roughly
+435 bytes an order — and every figure the bot reports is folded out of them when
+it is asked for. Nothing is stored as a running total, so a payout Play settles
+later, a refund, or a question nobody had thought of yet is answered by reading
+the orders again rather than by patching a number that cannot be recomputed. It
+is also why `/recount` cannot damage anything: it merges by order ID and never
+removes, so a page Play hands back short refreshes fewer orders and nothing else.
+
 One time zone decides everything about a day: which one an order is filed
 under, when `/today` starts over, and which window `/recount` asks Play for.
 It defaults to the browser's own and is a setting because that machine is not

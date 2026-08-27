@@ -39,7 +39,10 @@ phone beyond Telegram itself.
 - What the day has brought in so far, as a footer. Send the bot `/today`,
   `/week` or `/month` at any point — they sit in the bot's command menu — and it
   answers within seconds
-- `/recount` fetches from Play again and writes the result back — everything, or
+- The orders are kept in your own browser and every figure is worked out from
+  them, so a payout Play settles later, or a question you only think of next
+  month, is answered without re-fetching anything
+- `/recount` fetches from Play again and merges what comes back — everything, or
   a day, a month or a year (`/recount 2026-08`) — and `/adjust -6500` patches a
   day by hand, either direction, any day
 - Anything you type that is not a command is answered as a question about the
