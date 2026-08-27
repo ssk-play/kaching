@@ -190,7 +190,7 @@ const empty = () => ({
 // because every fold, every merge and every read has to walk the same list —
 // a third one added to some of them and not the others is a figure that stops
 // adding up to the day it came from.
-export const SPLITS = ['currencies', 'kinds']
+const SPLITS = ['currencies', 'kinds']
 
 // A buyer whose currency Play did not report. Filed under a key rather than
 // dropped, so the split always accounts for every order in the day — and so a
@@ -211,14 +211,7 @@ export const KIND_SUB = 'sub'
 export const KIND_RENEWAL = 'renewal'
 // An order this could not place — filed rather than dropped, for the same reason
 // the currency split files '?'.
-export const UNKNOWN_KIND = '?'
-export const hasKinds = (bucket) => Object.keys(bucket?.kinds ?? {}).length > 0
-
-// A bucket predating the split has no entry at all; one written since always
-// has at least the '?' key. The difference matters because a question about a
-// single currency answered from days that were never split apart would come
-// back short, and read as a quiet month rather than as a missing record.
-export const hasBreakdown = (bucket) => Object.keys(bucket?.currencies ?? {}).length > 0
+const UNKNOWN_KIND = '?'
 
 // The same payout-currency figure that went into the day's own amount, only
 // filed under the currency the buyer paid in. Deliberately not a second
@@ -239,7 +232,16 @@ function attribute(split, key, { amount, refund, counted }) {
 // NOK to a KRW total would produce a number that looks right and is not. Same for
 // a refund with no charge to take back out. Either way the message above printed
 // a figure the amount does not carry, so it is counted apart and the line says so.
-export function record(buckets, key, { net, refund, currency, from, kind }) {
+// The same work, done into a map the caller owns. A fold over three years of
+// orders calls this once per order, and `record` below copies the whole map of
+// days on every call — which at eleven thousand orders against three and a half
+// thousand days is forty million entry copies, and turned a read that should be
+// instant into four seconds.
+//
+// The day itself is still rebuilt rather than mutated: it is a handful of fields
+// and two small maps, and the copy is what keeps a bucket already handed out
+// from changing under whoever is holding it.
+export function recordInto(buckets, key, { net, refund, currency, from, kind }) {
   // Merged onto a fresh shape rather than used as-is: a bucket written by an
   // older version is missing fields added since, and += on undefined is NaN.
   const prev = { ...empty(), ...buckets[key] }
@@ -262,8 +264,12 @@ export function record(buckets, key, { net, refund, currency, from, kind }) {
   // numbers rather than a re-reading of the order, so each of them adds back up
   // to the day and to the other.
   next.kinds = attribute(prev.kinds, kind || UNKNOWN_KIND, share)
-  return { ...buckets, [key]: next }
+  buckets[key] = next
+  return buckets
 }
+
+// The pure form, for callers holding a map they did not build.
+export const record = (buckets, key, share) => recordInto({ ...buckets }, key, share)
 
 // Every bucket whose key starts with the prefix: a full day key sums one day, a
 // "YYYY-MM" prefix sums the month. Same function either way, so the two figures
@@ -298,100 +304,6 @@ function fold(buckets, wanted) {
     }
   }
   return out
-}
-
-// What each charge actually added, so a reversal takes out exactly that rather
-// than a fresh estimate of it. The two are not the same number: a charge counted
-// from Play's reported payout and a reversal Play has not settled yet would be
-// estimated at the default fee rate, and the difference would sit in the total
-// for good.
-//
-// Bounded by count rather than by age, unlike the buckets: an account busy enough
-// to evict an entry still inside the bucket window falls back to counting that
-// refund without subtracting it, which is the safe direction to be wrong in.
-export const MAX_COUNTED = 5000
-
-// A fourth field, present only while the figure is a guess. Play reports no net
-// at all until it settles an order, so what the tally counts at announce time is
-// an estimate off the price the buyer was charged — right for nearly every
-// order, and wrong for one whose discount Google funds, where the buyer pays 400
-// and the developer banks 2,500.
-//
-// Flagged rather than worked out again later, so a figure Play has already
-// settled is not "corrected" every poll for the rest of its life by the couple
-// of units a moving exchange rate shifts it.
-export const ESTIMATED = 'e'
-
-export function remember(ledger, id, { currency, amount, estimated }, max = MAX_COUNTED) {
-  if (ledger.some(([known]) => known === id)) return ledger
-  const next = [...ledger, estimated ? [id, amount, currency, ESTIMATED] : [id, amount, currency]]
-  return next.length > max ? next.slice(next.length - max) : next
-}
-
-// Entries written before this field existed read as settled, so they are never
-// touched. Their figures are put right with /recount, which is the tool for a
-// tally that has drifted from Play for any reason.
-export const isEstimate = (ledger, id) =>
-  ledger.find(([known]) => known === id)?.[3] === ESTIMATED
-
-// Play has settled it: the entry stops being a guess and carries what the tally
-// actually counted, which is what a later reversal has to take back out.
-export const confirm = (ledger, id, amount) =>
-  ledger.map((entry) => (entry[0] === id ? [entry[0], amount, entry[2]] : entry))
-
-// The currency has to match. A developer paid in a different currency than when
-// the charge was counted would otherwise have an old figure taken straight out of
-// a total kept in the new one.
-export function amountFor(ledger, id, currency) {
-  const found = ledger.find(([known]) => known === id)
-  if (!found) return null
-  // Zero is zero in every currency — which is what the entries banked for orders
-  // adopted at first sync are worth. Any other figure has to have been counted in
-  // the same currency the total is kept in.
-  return found[1] === 0 || found[2] === currency ? found[1] : null
-}
-
-// Money already counted, found to be worth something else. The day keeps its
-// order counts — nothing new happened, the same order simply turned out to be
-// worth a different figure — and the currency split moves with the amount, or it
-// would stop adding up to the day it was split from.
-//
-// A day the bucket window has already dropped is left alone rather than
-// recreated: putting it back would resurrect a single order as if it were the
-// whole day's takings.
-export function resettle(buckets, key, { currency, kind }, amount) {
-  const prev = buckets[key]
-  if (!prev || !amount) return buckets
-  // A bucket that has a split but no row under this code yet gets one: moving
-  // the day's amount and leaving the split behind would have the two disagree,
-  // which is the one thing the split is not allowed to do.
-  //
-  // A bucket from before the split existed gets nothing. Its orders were never
-  // filed under any currency, so one row here could only ever hold this
-  // correction and not the money it is correcting — and the day would stop
-  // being reported as unsplit while still being short by everything else in it.
-  // A gap that says it is a gap beats one that has been papered over.
-  //
-  // Decided per split, not once for the bucket: a day written when only the
-  // currency split existed has one and not the other, and the half that is there
-  // still has to be kept adding up.
-  const moved = (split, name) => {
-    const rows = prev[split]
-    if (!rows?.[name] && !Object.keys(rows ?? {}).length) return null
-    const row = rows[name] ?? perSplit()
-    return { ...rows, [name]: { ...row, amount: row.amount + amount } }
-  }
-  const currencies = moved('currencies', currency || UNKNOWN_CURRENCY)
-  const kinds = moved('kinds', kind || UNKNOWN_KIND)
-  return {
-    ...buckets,
-    [key]: {
-      ...prev,
-      amount: prev.amount + amount,
-      ...(currencies ? { currencies } : {}),
-      ...(kinds ? { kinds } : {}),
-    },
-  }
 }
 
 // A hand-entered correction, kept in buckets of the same shape so the same fold
