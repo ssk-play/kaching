@@ -497,6 +497,12 @@
   "msgNeedAiHost": {
     "message": "Chrome needs permission to reach that host. Save again and allow it, or clear the API key."
   },
+  "msgAiDropsSystem": {
+    "message": "This endpoint forwards only the last message. The instructions and the tally tools never reach the model, so it answers from nothing. Try a different model or a different API address."
+  },
+  "msgAiDropsTools": {
+    "message": "This endpoint drops the tally tools, so the model cannot read a single figure and will make them up. Try a different model or a different API address."
+  },
   "btnTestAi": {
     "message": "Ask a test question"
   },

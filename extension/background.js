@@ -17,7 +17,8 @@ import {
   foldDays, read as ordersRead, write as ordersWrite, countInto,
   forget as forgetOldOrders,
 } from './orders.js'
-import { ask, summarize, compacted, isQuestion, freshTurns, nextTurns } from './llm.js'
+import { ask, probe, summarize, compacted, isQuestion, freshTurns, nextTurns,
+  DROPS_SYSTEM, DROPS_TOOLS } from './llm.js'
 import { tools as ledgerTools } from './ledger.js'
 import { t } from './i18n.js'
 import { shouldAlert, FAILS_BEFORE_ALERT } from './health.js'
@@ -227,6 +228,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       // and still gets a question that exercises a tool call rather than a
       // greeting the model could answer without reading anything.
       const question = msg.question || s.aiProbe || t('cmdAiProbe')
+      // Before the question, whether this endpoint can carry one. A gateway that
+      // forwards only the last user message answers everything with a 200 and a
+      // paragraph, so the question below would come back looking like a pass —
+      // fluent, in the right language, and about nothing that is in this tally.
+      // Failing here names which half is missing; failing on the answer names
+      // nothing, because the answer reads fine.
+      const carries = await probe({ apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel })
+      if (carries === DROPS_SYSTEM) throw new Error(t('msgAiDropsSystem'))
+      if (carries === DROPS_TOOLS) throw new Error(t('msgAiDropsTools'))
       return ask({
         apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel,
         question, today, tools: ledgerTools(today),

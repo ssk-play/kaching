@@ -64,7 +64,7 @@ const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, byKind, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
-  summarize, compacted, RECAP,
+  summarize, compacted, RECAP, probe, CARRIES_BOTH, DROPS_TOOLS, DROPS_SYSTEM,
 } = await load('llm.js')
 
 // One wide span rather than a window per glyph. Half the pictograms this
