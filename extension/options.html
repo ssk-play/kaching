@@ -14,7 +14,8 @@
     margin: 2.25rem 0 .75rem; padding-bottom: .4rem; border-bottom: 1px solid var(--line);
   }
   label.field { display: block; margin: 1rem 0 .25rem; font-weight: 600; }
-  input[type=text], input[type=password], input[type=url], input[type=number] {
+  input[type=text], input[type=password], input[type=url], input[type=number],
+  input[type=time] {
     width: 100%; padding: .5rem; font: inherit; box-sizing: border-box;
     border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit;
   }
@@ -22,6 +23,15 @@
   .check input { width: auto; }
   .hint { font-size: .85em; opacity: .65; margin-top: .3rem; }
   .paired { display: flex; gap: .5rem; }
+  /* Two fields that are one decision, so they read as one row. */
+  .pair { display: flex; gap: .75rem; align-items: flex-end; margin-top: 1rem; }
+  .pair > * { flex: 1; min-width: 0; }
+  .pair .field { margin-top: 0; }
+  /* A switch that heads the fields it governs, and the fields indented under it
+     so the dependence is visible rather than explained. */
+  .check.lead { margin-top: 1.5rem; }
+  .sub { margin-left: 1.6rem; margin-top: .5rem; }
+  .sub[hidden] { display: none; }
   .paired button { white-space: nowrap; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 2rem; }
   button {
@@ -149,6 +159,27 @@
 <label class="field" for="intervalMinutes" data-i18n="lblInterval"></label>
 <input id="intervalMinutes" type="number" min="1" max="120" />
 <div class="hint" data-i18n="hintInterval"></div>
+
+<!-- The switch is the heading: off is as orders are found, on is the two fields
+     under it. They are one decision, so they sit on one row. -->
+<label class="check lead">
+  <input id="deliveryScheduled" type="checkbox" /><span data-i18n="lblDeliverySchedule"></span>
+</label>
+<div class="pair sub" id="deliveryWhen">
+  <div>
+    <label class="field" for="deliveryAnchor" data-i18n="lblDeliveryAt"></label>
+    <input id="deliveryAnchor" type="time" />
+  </div>
+  <div>
+    <label class="field" for="deliveryHours" data-i18n="lblDeliveryEvery"></label>
+    <input id="deliveryHours" type="number" min="1" max="24" step="1" list="deliveryPresets" />
+    <datalist id="deliveryPresets"></datalist>
+  </div>
+</div>
+
+<label class="check" style="margin-top:1.25rem">
+  <input id="deliveryPaused" type="checkbox" /><span data-i18n="lblDeliveryPaused"></span>
+</label>
 
 <label class="field" for="days" data-i18n="lblDays"></label>
 <input id="days" type="number" min="1" max="30" />

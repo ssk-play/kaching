@@ -1,8 +1,11 @@
 import {
   send as sendTelegram, findChatId, updates as tgUpdates, chatsIn, publishCommands, menuFingerprint,
+  pause, BURST, PACE_MS,
 } from './telegram.js'
 import { fetchOrders, keyFor } from './playconsole.js'
-import { load, isConfigured, zoneOf } from './settings.js'
+import {
+  load, isConfigured, zoneOf, deliveryDue, windowStart, normalizeAnchor, HOUR_MS,
+} from './settings.js'
 import { plan } from './filters.js'
 import { describe, label, totalLine, isSettled, estimatedNet } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
@@ -43,11 +46,13 @@ const LONG_POLL_SECONDS = 25
 // alarm, which Telegram answers with 409.
 const LISTEN_WINDOW_MS = 45_000
 const MAX_SEEN = 5000
-const MAX_MESSAGES = 10
 
 const state = () =>
   chrome.storage.local.get({
     seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0, lastOkAt: 0,
+    // When a batch last actually went out, and what settled while nothing was
+    // going out. Both belong to the delivery pace rather than to a poll.
+    lastDeliveryAt: 0, heldDrift: { moved: 0, by: 0 },
   })
 
 // Play reports no net at all until it settles an order, so what a day counts for
@@ -241,6 +246,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
         rates: {}, payoutCurrency: null, adjustments: {}, chatTurns: null, sweptOn: null,
+        lastDeliveryAt: 0, heldDrift: { moved: 0, by: 0 },
       })
       // The orders themselves, which are the tally. Removed rather than blanked:
       // they are one key per month, and a month with nothing in it should not be
@@ -266,11 +272,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       const { lastRun } = await chrome.storage.local.get({ lastRun: null })
       const alarms = await chrome.alarms.getAll()
       const alarm = alarms.find((a) => a.name === ALARM)
+      const s = await load()
       return {
         scheduled: alarm
           ? t('statusAlarm', alarm.periodInMinutes, new Date(alarm.scheduledTime).toLocaleTimeString())
           : t('statusNoAlarm'),
-        configured: isConfigured(await load()),
+        // Said separately from the check interval because they are separate
+        // clocks now, and the question "why has nothing arrived" has two
+        // answers.
+        delivery: deliveryLine(s, st.lastDeliveryAt),
+        configured: isConfigured(s),
         recorded: st.seen.length,
         consecutiveFailures: st.fails,
         lastSuccess: st.lastOkAt ? new Date(st.lastOkAt).toLocaleString() : null,
@@ -286,6 +297,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   )
   return true
 })
+
+// What the delivery pace amounts to right now, in one line. Paused is said
+// first: a paused install with a twelve-hour window is paused, and reporting the
+// window would read as an explanation for silence that is going to outlast it.
+//
+// The time named is the next boundary, read in the zone the boundaries are
+// counted from — the browser's own would print 09:00 as 01:00 for anyone whose
+// tally runs on a different clock, which is the one number this line exists to
+// give them.
+function deliveryLine(s, lastDeliveryAt) {
+  if (s.deliveryPaused) return t('statusPaused')
+  const hours = Number(s.deliveryHours) || 0
+  if (!s.deliveryScheduled || hours <= 0) return t('statusDeliveryNow')
+  const at = normalizeAnchor(s.deliveryAnchor)
+  const when = deliveryDue(s, lastDeliveryAt)
+    ? t('statusDeliverySoon')
+    : new Date(windowStart(s) + hours * HOUR_MS)
+      .toLocaleTimeString(undefined, { timeZone: zoneOf(s) })
+  // A day-long window has one boundary a day, and naming it twice — "every 24 h
+  // from 05:00" — says less than "once a day at 05:00" does.
+  return hours === 24
+    ? t('statusDeliveryDaily', at, when)
+    : t('statusDeliveryEvery', hours, at, when)
+}
 
 // Answers /today and /month from the same buckets the footer is drawn from, so
 // the figure the chat reports on request can never disagree with one it already
@@ -905,9 +940,7 @@ async function onSuccess(s, all) {
   // the split, because the minimum-payout filter is written in this currency.
   const fx = await exchange(all, epoch)
 
-  const { batch, overflow, muted, freshCount, unseenCount } = plan(
-    terminal, seen, s, MAX_MESSAGES, fx,
-  )
+  const { batch, muted, freshCount, unseenCount } = plan(terminal, seen, s, fx)
 
   if (!st.bootstrapped) {
     // First run adopts what is already there. Announcing history would train the
@@ -977,6 +1010,33 @@ async function onSuccess(s, all) {
   // the reset had just removed.
   await claim(() => (epoch === resetEpoch ? ordersWrite(terminal, zone) : null))
 
+  // Drift is read off the difference between what the store held and what this
+  // fetch says, so it is only visible on the one run that writes it. Held back
+  // with the orders it belongs to, it would simply be lost — the next run
+  // compares the store against itself and sees nothing moved. So it accumulates
+  // instead, and goes out with the batch it explains.
+  const pendingDrift = { moved: st.heldDrift.moved + settled, by: st.heldDrift.by + drift }
+
+  // Everything above this line happened: the orders are stored and the day is
+  // counted. What the pace decides is only whether anyone is told yet.
+  //
+  // Nothing is added to `seen`, so the next run plans the same batch again, one
+  // order longer. That is the queue — there is no second list to keep in step
+  // with this one, and a worker that dies mid-hold loses nothing.
+  if (!deliveryDue(s, st.lastDeliveryAt)) {
+    await write({ fails: 0, lastOkAt: Date.now(), heldDrift: pendingDrift })
+    await forgetOldOrders(today)
+    // A failure alert is not an order. Someone who paused delivery asked for
+    // quiet, not for the one thing this tool exists to prevent: a stopped
+    // checker that looks exactly like a quiet sales day.
+    await announceRecovery(s, st)
+    if (freshCount) {
+      await recordOnce('info', s.deliveryPaused ? 'logPaused' : 'logHeld', freshCount)
+    }
+    badge(freshCount ? String(freshCount) : '', '#f09000')
+    return { held: freshCount, scanned: terminal.length, paused: s.deliveryPaused }
+  }
+
   // A short journal of just this run's deliveries: writing it after every send
   // costs almost nothing, and a worker death loses at most the single order
   // whose send had already landed.
@@ -1005,7 +1065,7 @@ async function onSuccess(s, all) {
   // to send it leaves that order in the store and out of `seen`, so the next run
   // announces it — and a footer folded from the store as it stands would count
   // it once for being there and once for being announced.
-  const announcing = new Set([...batch, ...overflow].map((o) => o.id))
+  const announcing = new Set(batch.map((o) => o.id))
   let running = foldDays(kept.filter((o) => !announcing.has(o.id)), zone, fx)
   const footerFor = (o) => {
     running = countInto(running, o, zone, fx)
@@ -1015,17 +1075,15 @@ async function onSuccess(s, all) {
   }
 
   try {
-    for (const o of batch) {
+    // Every fresh order, however many that is. A batch held for twelve hours is
+    // a long batch by design, and slowing down once past a burst is what makes
+    // that deliverable rather than something Telegram refuses partway through.
+    for (const [i, o] of batch.entries()) {
+      if (i >= BURST) await pause(PACE_MS)
       const text = [describe(o, s, fx), footerFor(o)].filter(Boolean).join('\n')
       await sendTelegram(s.botToken, s.chatId, text)
       await record('order', 'logOrder', o.product || o.id, o.state)
       await note(o)
-    }
-    if (overflow.length) {
-      await sendTelegram(s.botToken, s.chatId, label(s, t('tgMore', overflow.length)))
-      // Only once that notice is out may the tail be written off. Banking it
-      // first buried orders the user was never told existed.
-      for (const o of overflow) await note(o)
     }
   } catch (err) {
     // A reset landed mid-run; recording failure state would re-dirty the slate
@@ -1035,11 +1093,22 @@ async function onSuccess(s, all) {
   }
 
   for (const key of journal) seen.add(key)
-  await write({ fails: 0, lastOkAt: Date.now() })
+  // The window reopens from when a batch actually went out, not from every run
+  // that was allowed to send: a quiet hour must not consume the wait the next
+  // order is serving.
+  const sent = journal.length > 0
+  await write({
+    fails: 0,
+    lastOkAt: Date.now(),
+    heldDrift: { moved: 0, by: 0 },
+    ...(sent ? { lastDeliveryAt: Date.now() } : {}),
+  })
 
   // Said once, after the batch, so it cannot be mistaken for one of the orders
-  // just announced.
-  await announceDrift(settled, drift, s)
+  // just announced. Carries whatever settled while delivery was held, too —
+  // that money is in the day's figure either way, and the line is what explains
+  // the jump.
+  await announceDrift(pendingDrift.moved, pendingDrift.by, s)
   // Months older than the tally can report on at all.
   await forgetOldOrders(today)
 
@@ -1050,12 +1119,7 @@ async function onSuccess(s, all) {
     terminal.length,
   )
 
-  // Informational and best-effort: losing this must not undo a run whose order
-  // messages all landed.
-  if (st.fails >= FAILS_BEFORE_ALERT) {
-    await sendTelegram(s.botToken, s.chatId, label(s, t('tgRecovered'))).catch(() => {})
-    await record('info', 'logRecovered')
-  }
+  await announceRecovery(s, st)
 
   badge(freshCount ? String(freshCount) : '', '#4caf50')
   return {
@@ -1064,6 +1128,15 @@ async function onSuccess(s, all) {
     filtered: unseenCount - freshCount,
     pending: all.length - terminal.length,
   }
+}
+
+// Informational and best-effort: losing this must not undo a run whose order
+// messages all landed. Said on any run Play answered, held delivery included —
+// the outage it closes was announced regardless of the pace.
+async function announceRecovery(s, st) {
+  if (st.fails < FAILS_BEFORE_ALERT) return
+  await sendTelegram(s.botToken, s.chatId, label(s, t('tgRecovered'))).catch(() => {})
+  await record('info', 'logRecovered')
 }
 
 const DELIVERY_PREFIX = 'telegram: '

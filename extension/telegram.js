@@ -8,19 +8,49 @@ const API = 'https://api.telegram.org/bot'
 // "message" would permanently switch off the channel posts findChatId reads.
 const KINDS = encodeURIComponent('["message","channel_post"]')
 
+// Telegram takes a short burst into one chat at full speed and throttles what
+// follows. So a batch runs flat out to here and is paced after that: the runs
+// people actually see — one order, three orders — are no slower than they were,
+// and a backlog of sixty goes out over a minute instead of being refused
+// halfway.
+export const BURST = 5
+// Roughly the sustained per-chat rate, waited between the messages past the
+// burst.
+export const PACE_MS = 1000
+
+export const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Telegram answers a burst with 429 and says how long to hold off for. Obeying
+// that is the difference between a slow delivery and a failed one: the throw
+// would end the run, and the orders it was still holding would wait for the next
+// poll to try the same burst again.
+//
+// Twice, because a third 429 after two honoured waits is not a burst any more —
+// it is something the caller should hear about rather than sit in.
+const RETRIES = 2
+// A retry_after long enough to outlive the service worker is not a wait, it is a
+// hang. Refused rather than slept through, so the failure is logged and the next
+// poll picks the order up.
+const MAX_RETRY_S = 60
+
 export async function send(botToken, chatId, text) {
-  const res = await fetch(`${API}${botToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // No parse_mode: order text is arbitrary and escaping it wrong would turn a
-    // delivery into a 400. Plain text always sends.
-    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-  })
-  const json = await res.json().catch(() => ({}))
-  if (!res.ok || !json.ok) {
-    throw new Error(`telegram ${res.status} ${json.description ?? 'unknown error'}`)
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetch(`${API}${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No parse_mode: order text is arbitrary and escaping it wrong would turn a
+      // delivery into a 400. Plain text always sends.
+      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (res.ok && json.ok) return json.result.message_id
+
+    const after = res.status === 429 ? Number(json.parameters?.retry_after) : 0
+    if (!(after > 0 && after <= MAX_RETRY_S && attempt < RETRIES)) {
+      throw new Error(`telegram ${res.status} ${json.description ?? 'unknown error'}`)
+    }
+    await pause(after * 1000)
   }
-  return json.result.message_id
 }
 
 // Resolves the chat id from whatever conversation the user has already started

@@ -1,5 +1,6 @@
 import {
-  DEFAULTS, load, developerIdFrom, isConfigured, consoleUrlFor, clampNumber,
+  DEFAULTS, load, developerIdFrom, isConfigured, consoleUrlFor, clampNumber, DELIVERY_PRESETS,
+  normalizeAnchor,
 } from './settings.js'
 import { describe, totalLine } from './format.js'
 import { read as readLog, MAX_ENTRIES } from './log.js'
@@ -67,11 +68,24 @@ function fillZones() {
 }
 fillZones()
 
+// The pace the collected orders are allowed out at, offered as a list of the
+// hours anyone actually asks for. A datalist rather than a select, because the
+// field stays a number: 4 is a perfectly reasonable answer and nobody should
+// have to wait for it to be added here.
+$('deliveryPresets').append(
+  ...DELIVERY_PRESETS.map((h) => new Option(t('dlvHours', h), String(h))),
+)
+
 const CHECKBOXES = [
   'notifyCharged', 'notifyRefunded', 'showLocalTime', 'showUtcTime', 'showBreakdown',
-  'showDailyTotal', 'verbose',
+  'showDailyTotal', 'deliveryScheduled', 'deliveryPaused', 'verbose',
 ]
-const NUMBERS = { intervalMinutes: [1, 120], days: [1, 30], minPayout: [0, Number.MAX_SAFE_INTEGER] }
+const NUMBERS = {
+  intervalMinutes: [1, 120],
+  days: [1, 30],
+  deliveryHours: [1, 24],
+  minPayout: [0, Number.MAX_SAFE_INTEGER],
+}
 const TEXTS = [
   'botToken', 'chatId', 'senderName', 'consoleUrl', 'packages', 'aiKey', 'aiBaseUrl', 'aiModel',
   'aiProbe',
@@ -94,8 +108,18 @@ function fill(settings) {
   $('consoleUrl').value = settings.consoleUrl || consoleUrlFor(settings.developerId)
   for (const id of Object.keys(NUMBERS)) $(id).value = settings[id]
   for (const id of CHECKBOXES) $(id).checked = settings[id]
+  $('deliveryAnchor').value = normalizeAnchor(settings.deliveryAnchor)
+  showSchedule()
   $('setup').hidden = isConfigured(settings)
 }
+
+// The switch above them says whether they apply at all, so with it off they are
+// two answers to a question nobody asked. The switch is right there to bring
+// them back, which is what makes hiding them fair rather than a disappearance.
+function showSchedule() {
+  $('deliveryWhen').hidden = !$('deliveryScheduled').checked
+}
+$('deliveryScheduled').addEventListener('change', showSchedule)
 
 function read() {
   const out = {}
@@ -105,6 +129,10 @@ function read() {
     out[id] = clampNumber($(id).value, range, DEFAULTS[id])
   }
   for (const id of CHECKBOXES) out[id] = $(id).checked
+  // Read through the same normaliser the form is filled from, so a browser that
+  // hands back "5:00" — or nothing at all — stores what every other reader of
+  // this field expects to parse.
+  out.deliveryAnchor = normalizeAnchor($('deliveryAnchor').value)
   // Stored alongside the URL it came from so the service worker never has to
   // parse a user-entered string at poll time.
   out.developerId = developerIdFrom(out.consoleUrl)
@@ -412,6 +440,10 @@ function failureText(reason) {
 function explain(r) {
   if (r.needsSetup) return t('msgNeedSetup')
   if (r.failed) return failureText(r.failed)
+  // Read before the new/scanned line rather than after: a held run scanned
+  // orders and announced none, which is what "nothing new" says too, and the
+  // two mean opposite things.
+  if ('held' in r) return t(r.paused ? 'resultPaused' : 'resultHeld', r.held)
   if ('bootstrapped' in r) return t('resultFirst', r.bootstrapped)
   return r.new > 0 ? t('resultNew', r.new, r.scanned) : t('resultNone', r.scanned)
 }
@@ -420,7 +452,7 @@ async function showStatus() {
   const res = await ask('status')
   if (!res.ok) return say(res.error, 'err')
   const s = res.result
-  const lines = [s.scheduled]
+  const lines = [s.scheduled, s.delivery]
   if (!s.configured) lines.push(t('msgNeedSetup'))
   lines.push(t('statusRecorded', s.recorded))
   if (s.consecutiveFailures > 0) lines.push(t('statusFailures', s.consecutiveFailures))
