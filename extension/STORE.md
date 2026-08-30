@@ -60,6 +60,9 @@ phone beyond Telegram itself.
 - A minimum payout, so zero-value test orders stay quiet
 - Whether each message carries the day's running total
 - How often to check, and how far back each check reads
+- Whether messages arrive as orders are found or on a schedule you set — once a
+  day at 05:00, say — and a pause switch for when you want the collecting to go
+  on without the messages
 - An optional sender label, for when one Telegram chat collects alerts from
   several places
 

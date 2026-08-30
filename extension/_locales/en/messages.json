@@ -95,6 +95,21 @@
   "hintInterval": {
     "message": "Only runs while Chrome is open, using your signed-in Play Console session."
   },
+  "lblDeliverySchedule": {
+    "message": "Deliver on a schedule"
+  },
+  "lblDeliveryEvery": {
+    "message": "Every (hours)"
+  },
+  "lblDeliveryAt": {
+    "message": "Starts at"
+  },
+  "lblDeliveryPaused": {
+    "message": "Pause delivery (failure alerts still come through)"
+  },
+  "dlvHours": {
+    "message": "Every $1 h"
+  },
   "lblDays": {
     "message": "Look back (days)"
   },
@@ -173,6 +188,21 @@
   "statusNoAlarm": {
     "message": "No schedule registered. Press Save to set it."
   },
+  "statusPaused": {
+    "message": "Delivery paused"
+  },
+  "statusDeliveryNow": {
+    "message": "Delivering as found"
+  },
+  "statusDeliveryEvery": {
+    "message": "Delivering every $1 h from $2 — next $3"
+  },
+  "statusDeliveryDaily": {
+    "message": "Delivering once a day at $1 — next $2"
+  },
+  "statusDeliverySoon": {
+    "message": "on the next check"
+  },
   "resultNew": {
     "message": "$1 new, $2 scanned."
   },
@@ -181,6 +211,12 @@
   },
   "resultFirst": {
     "message": "First sync: recorded $1 orders without notifying."
+  },
+  "resultHeld": {
+    "message": "$1 new, held until the delivery window."
+  },
+  "resultPaused": {
+    "message": "$1 new, waiting — delivery is paused."
   },
   "notifNewOrder": {
     "message": "Purchase"
@@ -205,9 +241,6 @@
   },
   "tgSettled": {
     "message": "Play settled $1 order(s) differently than estimated · total moved $2"
-  },
-  "tgMore": {
-    "message": "…and $1 more."
   },
   "tgFailHeader": {
     "message": "Kaching is not working."
@@ -256,6 +289,12 @@
   },
   "logOrder": {
     "message": "Sent: $1 ($2)"
+  },
+  "logHeld": {
+    "message": "Holding $1 — waiting for the delivery window"
+  },
+  "logPaused": {
+    "message": "$1 waiting — delivery paused"
   },
   "logRecovered": {
     "message": "Recovered"

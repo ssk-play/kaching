@@ -32,17 +32,22 @@ export function matches(order, settings, fx = {}) {
   return true
 }
 
-// Splits a fetched page into what to send, what to mention only as a count, and
-// what to bank silently. Kept pure and separate from delivery so the ordering
-// rules — which are easy to get subtly wrong — can be tested directly.
-export function plan(terminal, seenKeys, settings, limit, fx = {}) {
+// Splits a fetched page into what to send and what to bank silently. Kept pure
+// and separate from delivery so the ordering rules — which are easy to get
+// subtly wrong — can be tested directly.
+//
+// There is no cap. A batch used to stop at ten and stand the rest down with a
+// count — "…and 5 more" — which is the one thing a sales notifier must not do:
+// the orders it hid were real money, and a line saying so is not the message
+// anybody installed this for. A big batch is now simply a big batch, paced out
+// at the rate Telegram accepts.
+export function plan(terminal, seenKeys, settings, fx = {}) {
   const seen = new Set(seenKeys)
   const unseen = terminal.filter((o) => !seen.has(keyFor(o)))
   const fresh = unseen.filter((o) => matches(o, settings, fx))
   return {
     // Oldest first, so a burst reads in the order it happened.
-    batch: fresh.slice(0, limit).reverse(),
-    overflow: fresh.slice(limit),
+    batch: [...fresh].reverse(),
     muted: unseen.filter((o) => !matches(o, settings, fx)),
     freshCount: fresh.length,
     unseenCount: unseen.length,

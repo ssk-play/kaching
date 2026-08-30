@@ -50,13 +50,14 @@ globalThis.chrome = {
 const load = (f) => import(pathToFileURL(path.join(EXT, f)).href)
 const {
   DEFAULTS, developerIdFrom, packageList, isConfigured, consoleUrlFor, clampNumber, zoneOf, isZone,
+  deliveryDue, windowStart, anchorMinutes, normalizeAnchor, DELIVERY_PRESETS, HOUR_MS,
 } = await load('settings.js')
 const { matches, plan } = await load('filters.js')
 const { times, describe, feeRate, cycleOf, estimatedNet, isSettled } = await load('format.js')
 const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('health.js')
 const { ratesFrom, merge, payoutCurrency, convert, rateFor } = await load('fx.js')
 const T = await load('totals.js')
-const { chatsIn, menuFingerprint, MENU } = await load('telegram.js')
+const { chatsIn, menuFingerprint, MENU, send: tgSend, BURST } = await load('telegram.js')
 const O = await load('orders.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
@@ -402,29 +403,27 @@ const orders = (n, over = {}) =>
 test('plan sends oldest first within the batch', () => {
   // The API returns newest first; a burst should read in the order it happened.
   const page = orders(3)
-  const { batch } = plan(page, [], DEFAULTS, 10)
+  const { batch } = plan(page, [], DEFAULTS)
   assert.deepEqual(batch.map((o) => o.id), [page[2].id, page[1].id, page[0].id])
 })
 
-test('plan separates the overflow tail from the batch instead of dropping it', () => {
+test('plan announces every fresh order rather than standing a tail down', () => {
+  // A batch used to stop at ten and replace the rest with "…and 5 more", which
+  // reported money without saying whose. Nothing is held back now.
   const page = orders(15)
-  const { batch, overflow, freshCount } = plan(page, [], DEFAULTS, 10)
-  assert.equal(batch.length, 10)
-  assert.equal(overflow.length, 5)
+  const { batch, freshCount } = plan(page, [], DEFAULTS)
+  assert.equal(batch.length, 15)
   assert.equal(freshCount, 15)
-  // Every fresh order is accounted for in exactly one bucket.
-  const ids = new Set([...batch, ...overflow].map((o) => o.id))
-  assert.equal(ids.size, 15)
+  assert.equal(new Set(batch.map((o) => o.id)).size, 15)
 })
 
-test('plan puts filter-muted orders in muted, never in batch or overflow', () => {
+test('plan puts filter-muted orders in muted, never in the batch', () => {
   const page = [order({ id: 'GPA.0000-0000-0000-00001' }), order({ id: 'GPA.0000-0000-0000-00002', packageName: 'com.other' })]
-  const { batch, overflow, muted, freshCount, unseenCount } = plan(
-    page, [], { ...DEFAULTS, packages: 'com.example.app' }, 10,
+  const { batch, muted, freshCount, unseenCount } = plan(
+    page, [], { ...DEFAULTS, packages: 'com.example.app' },
   )
   assert.deepEqual(muted.map((o) => o.packageName), ['com.other'])
   assert.equal(batch.length, 1)
-  assert.equal(overflow.length, 0)
   assert.equal(freshCount, 1)
   assert.equal(unseenCount, 2)
 })
@@ -432,7 +431,7 @@ test('plan puts filter-muted orders in muted, never in batch or overflow', () =>
 test('plan skips orders already recorded as seen', () => {
   const page = orders(3)
   const seen = [`${page[0].id}:charged`]
-  const { batch, unseenCount } = plan(page, seen, DEFAULTS, 10)
+  const { batch, unseenCount } = plan(page, seen, DEFAULTS)
   assert.equal(unseenCount, 2)
   assert.ok(!batch.some((o) => o.id === page[0].id))
 })
@@ -441,9 +440,155 @@ test('plan treats a refund of a seen order as new', () => {
   // The dedupe key carries state, so a refund on an announced order re-fires.
   const charged = order({ id: 'GPA.0000-0000-0000-00009' })
   const refunded = order({ id: 'GPA.0000-0000-0000-00009', state: 'refunded' })
-  const { batch } = plan([refunded], [`${charged.id}:charged`], DEFAULTS, 10)
+  const { batch } = plan([refunded], [`${charged.id}:charged`], DEFAULTS)
   assert.equal(batch.length, 1)
   assert.equal(batch[0].state, 'refunded')
+})
+
+test('delivery is immediate until someone switches a schedule on', () => {
+  // The default has to be the behaviour the extension already had: an install
+  // that never opens this section must not start batching. The hours and the
+  // time beside them are what the switch turns on, not what decides whether it
+  // is on — so they hold a usable schedule while it is off.
+  assert.equal(DEFAULTS.deliveryScheduled, false)
+  assert.equal(DEFAULTS.deliveryPaused, false)
+  assert.ok(DEFAULTS.deliveryHours > 0)
+  assert.equal(deliveryDue(DEFAULTS, 4_999, 5_000), true)
+  assert.equal(deliveryDue({ ...DEFAULTS, deliveryHours: 24 }, 4_999, 5_000), true)
+})
+
+// The windows are counted from midnight, so these tests name wall-clock times
+// rather than offsets from an arbitrary instant — which is the whole point of
+// what they are checking.
+const utc = (day, hh, mm = 0) => Date.parse(`${day}T00:00:00Z`) + (hh * 60 + mm) * 60_000
+
+test('windows are counted from midnight, not from the last delivery', () => {
+  const s = { deliveryScheduled: true, deliveryHours: 3, timeZone: 'UTC' }
+  const day = '2026-08-30'
+  // A batch that went out at 09:40 spends the 09:00 window and no other.
+  assert.equal(windowStart(s, utc(day, 9, 40)), utc(day, 9))
+  assert.equal(windowStart(s, utc(day, 11, 59)), utc(day, 9))
+  assert.equal(windowStart(s, utc(day, 12)), utc(day, 12))
+  // And the first window of a day starts at midnight itself.
+  assert.equal(windowStart(s, utc(day, 0, 1)), utc(day, 0))
+})
+
+test('one batch per window, at the first check that has something to say', () => {
+  const s = { deliveryScheduled: true, deliveryHours: 3, timeZone: 'UTC' }
+  const day = '2026-08-30'
+  const sent = utc(day, 9, 40)
+  // Same window: already spent, whatever arrives now waits.
+  assert.equal(deliveryDue(s, sent, utc(day, 11, 59)), false)
+  // The next boundary opens it again — and a check that lands at 12:20 rather
+  // than 12:00 still delivers, because nobody can arrange when Chrome is awake.
+  assert.equal(deliveryDue(s, sent, utc(day, 12)), true)
+  assert.equal(deliveryDue(s, sent, utc(day, 12, 20)), true)
+})
+
+test('a twelve-hour window lands at midnight and noon, every day', () => {
+  const s = { deliveryScheduled: true, deliveryHours: 12, timeZone: 'UTC' }
+  assert.equal(windowStart(s, utc('2026-08-30', 11, 59)), utc('2026-08-30', 0))
+  assert.equal(windowStart(s, utc('2026-08-30', 12)), utc('2026-08-30', 12))
+  // A batch sent late in the morning does not push the afternoon one to 23:00.
+  assert.equal(deliveryDue(s, utc('2026-08-30', 11, 30), utc('2026-08-30', 12)), true)
+  // And the day rolls over into a fresh window rather than a rolling one.
+  assert.equal(deliveryDue(s, utc('2026-08-30', 12, 5), utc('2026-08-31', 0)), true)
+})
+
+test('the windows are the configured zone\'s, not the browser\'s', () => {
+  // Midnight in Seoul is not midnight in UTC, and the day the tally is counted
+  // in is the one the boundaries have to follow.
+  const day = '2026-08-30'
+  const seoul = { deliveryScheduled: true, deliveryHours: 6, timeZone: 'Asia/Seoul' }
+  // 2026-08-30 00:00 KST is 2026-08-29 15:00 UTC.
+  const kstMidnight = Date.parse('2026-08-29T15:00:00Z')
+  assert.equal(windowStart(seoul, kstMidnight + 60_000), kstMidnight)
+  assert.equal(windowStart(seoul, kstMidnight + 7 * HOUR_MS), kstMidnight + 6 * HOUR_MS)
+  // The same instant under UTC falls in a different window entirely.
+  assert.equal(windowStart({ ...seoul, timeZone: 'UTC' }, kstMidnight + 60_000),
+    utc('2026-08-29', 12))
+})
+
+test('a daily window at 05:00 delivers once a day, at five', () => {
+  // The case the setting exists for: 24 hours counted from 05:00.
+  const s = { deliveryScheduled: true, deliveryHours: 24, deliveryAnchor: '05:00', timeZone: 'UTC' }
+  const day = '2026-08-30'
+  assert.equal(windowStart(s, utc(day, 5)), utc(day, 5))
+  assert.equal(windowStart(s, utc(day, 23, 59)), utc(day, 5))
+  // Before five, the window running is yesterday's — not one that has yet to
+  // open, and not midnight.
+  assert.equal(windowStart(s, utc(day, 4, 59)), utc('2026-08-29', 5))
+  assert.equal(windowStart(s, utc('2026-08-31', 0, 30)), utc(day, 5))
+
+  // Sent at 05:10, nothing more goes out until five the next morning.
+  const sent = utc(day, 5, 10)
+  assert.equal(deliveryDue(s, sent, utc(day, 23, 59)), false)
+  assert.equal(deliveryDue(s, sent, utc('2026-08-31', 4, 59)), false)
+  assert.equal(deliveryDue(s, sent, utc('2026-08-31', 5)), true)
+})
+
+test('an anchor moves every boundary, not just the first', () => {
+  const s = { deliveryScheduled: true, deliveryHours: 6, deliveryAnchor: '05:00', timeZone: 'UTC' }
+  const day = '2026-08-30'
+  for (const [hh, start] of [[5, 5], [10, 5], [11, 11], [17, 17], [23, 23]]) {
+    assert.equal(windowStart(s, utc(day, hh)), utc(day, start), `${hh}:00`)
+  }
+  // 23:00 + 6 h lands at 05:00 the next day, which is the anchor again.
+  assert.equal(windowStart(s, utc('2026-08-31', 4)), utc(day, 23))
+  assert.equal(windowStart(s, utc('2026-08-31', 5)), utc('2026-08-31', 5))
+})
+
+test('an anchor is a wall clock in the configured zone', () => {
+  // 05:00 means five in the morning where the tally lives, not five in UTC.
+  const s = { deliveryScheduled: true, deliveryHours: 24, deliveryAnchor: '05:00', timeZone: 'Asia/Seoul' }
+  // 2026-08-30 05:00 KST is 2026-08-29 20:00 UTC.
+  assert.equal(windowStart(s, Date.parse('2026-08-29T20:00:00Z')), Date.parse('2026-08-29T20:00:00Z'))
+  assert.equal(windowStart(s, Date.parse('2026-08-29T19:59:00Z')), Date.parse('2026-08-28T20:00:00Z'))
+})
+
+test('an unreadable anchor is midnight, not a delivery time nobody can explain', () => {
+  assert.equal(anchorMinutes('05:00'), 300)
+  assert.equal(anchorMinutes('5:07'), 307)
+  assert.equal(anchorMinutes('00:00'), 0)
+  for (const bad of ['', null, undefined, 'noon', '24:00', '05:60', '5', '05:00:00']) {
+    assert.equal(anchorMinutes(bad), 0, String(bad))
+  }
+  // And what the form stores is always the shape every reader parses.
+  assert.equal(normalizeAnchor('5:07'), '05:07')
+  assert.equal(normalizeAnchor(''), '00:00')
+  assert.equal(normalizeAnchor('23:30'), '23:30')
+  assert.equal(DEFAULTS.deliveryAnchor, '00:00')
+})
+
+test('the first batch after switching a window on is not held', () => {
+  // Nothing has been delivered, so there is no window to have spent. Starting
+  // the clock on a poll instead would swallow the order that proves it works.
+  assert.equal(deliveryDue({ deliveryScheduled: true, deliveryHours: 12, timeZone: 'UTC' }, 0, 1), true)
+})
+
+test('a pause outranks every window, including no window at all', () => {
+  const day = '2026-08-30'
+  const now = utc(day, 9, 30)
+  assert.equal(deliveryDue({ deliveryPaused: true, deliveryScheduled: false, timeZone: 'UTC' }, 0, now), false)
+  assert.equal(
+    deliveryDue({ deliveryPaused: true, deliveryScheduled: true, deliveryHours: 3, timeZone: 'UTC' }, 1, now), false,
+  )
+  // A pause does not move the boundaries: unpausing after a long quiet lets the
+  // backlog out at the first check of a window that has not been served.
+  assert.equal(
+    deliveryDue({ deliveryPaused: false, deliveryScheduled: true, deliveryHours: 3, timeZone: 'UTC' }, 1, now), true,
+  )
+})
+
+test('a typed delivery interval is clamped, not refused', () => {
+  // The presets are a convenience; the field is a number and takes 4 as readily
+  // as 3. What it must not take is a zero — that is the switch's answer, not an
+  // interval — or a week-long one.
+  assert.ok(!DELIVERY_PRESETS.includes(0), 'immediate is the switch, not an hours value')
+  assert.equal(clampNumber('4', [1, 24], DEFAULTS.deliveryHours), 4)
+  assert.equal(clampNumber('0', [1, 24], DEFAULTS.deliveryHours), 1)
+  assert.equal(clampNumber('999', [1, 24], DEFAULTS.deliveryHours), 24)
+  assert.equal(clampNumber('', [1, 24], DEFAULTS.deliveryHours), DEFAULTS.deliveryHours)
 })
 
 // This policy has been wrong in both directions across two review rounds, so it
@@ -2137,3 +2282,122 @@ test('a rebuild counts a refunded order as the charge and the reversal it was', 
   assert.equal(figures.currencies.KRW.amount, 0)
 })
 
+
+// The delivery pace, exercised through a real poll rather than through
+// deliveryDue alone: what it has to get right is not the arithmetic but which
+// half of a run it gates — the tally goes on, the messages wait.
+const PACED = () => ({
+  botToken: 'b', chatId: '1', developerId: '1', timeZone: 'UTC', days: 30,
+  bootstrapped: true, seen: [], delivered: [], payoutCurrency: 'KRW', rates: {},
+  consoleUrl: 'https://play.google.com/console/u/0/developers/1/orders',
+})
+
+// What the day stands at, folded from the store rather than from anything the
+// poll returned: the whole point of holding a message is that the tally is not
+// waiting on it.
+const dayNow = async (zone = 'UTC') =>
+  T.sum(O.foldDays(await O.readAll(zone), zone, { currency: 'KRW', rates: {} }),
+    T.dayKey(Date.now(), zone))
+
+test('a held run counts the orders and announces them when the window opens', async () => {
+  const zone = 'UTC'
+  storage = { ...PACED(), deliveryScheduled: true, deliveryHours: 3, lastDeliveryAt: Date.now() }
+  const at = Date.now() - 3_600_000
+  const orders = [{ id: 'A', at, net: 5000 }]
+
+  // Inside the window: nothing is sent, and the day already knows about it.
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  assert.equal((await dayNow(zone)).amount, 5000)
+  assert.equal((await dayNow(zone)).orders, 1)
+
+  // A second order arrives while the first is still waiting. Both wait.
+  orders.push({ id: 'B', at: at + 60_000, net: 3000 })
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+
+  // The window opens: both go out in one batch, and the footer counts each order
+  // once rather than once for being stored and again for being announced.
+  storage.lastDeliveryAt = Date.now() - 4 * HOUR_MS
+  const out = await pollHarness({ orders })
+  assert.deepEqual(
+    out.sent.map((text) => text.split('\n').at(-1)),
+    ['Today 1 order · KRW 3,000', 'Today 2 orders · KRW 8,000'],
+  )
+  assert.equal((await dayNow(zone)).amount, 8000)
+  assert.equal((await dayNow(zone)).orders, 2)
+
+  // And a run that is allowed to send has nothing left to say.
+  storage.lastDeliveryAt = Date.now() - 4 * HOUR_MS
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  storage = {}
+})
+
+test('a pause stops the messages and not the tally', async () => {
+  const zone = 'UTC'
+  storage = { ...PACED(), deliveryPaused: true }
+  const at = Date.now() - 3_600_000
+  const orders = [{ id: 'A', at, net: 5000 }]
+
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  assert.equal((await dayNow(zone)).amount, 5000)
+
+  // Switched off, the backlog goes out on the very next check — and once.
+  storage.deliveryPaused = false
+  assert.equal((await pollHarness({ orders })).sent.length, 1)
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  assert.equal((await dayNow(zone)).amount, 5000)
+  storage = {}
+})
+
+test('a backlog is delivered in full, not summarised as a count', async () => {
+  // The batch cap was the one place this tool answered "there was money" without
+  // saying whose. A long hold is now a long batch.
+  const zone = 'UTC'
+  storage = { ...PACED(), deliveryScheduled: true, deliveryHours: 3, lastDeliveryAt: Date.now() }
+  const at = Date.now() - 6 * 3_600_000
+  const orders = Array.from({ length: BURST + 3 }, (_, i) => ({
+    id: `GPA.0000-0000-0000-1000${i}`, at: at + i * 60_000, net: 1000,
+  }))
+
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  storage.lastDeliveryAt = Date.now() - 4 * HOUR_MS
+  const out = await pollHarness({ orders })
+  assert.equal(out.sent.length, orders.length)
+  // Every order named once, and none of them replaced by a tally of the rest.
+  for (const o of orders) {
+    assert.equal(out.sent.filter((text) => text.includes(o.id)).length, 1, o.id)
+  }
+  // Counted off the store rather than off today, since a six-hour backlog can
+  // straddle midnight — which is the point of the store being the tally.
+  assert.equal((await O.readAll(zone)).length, orders.length)
+
+  storage.lastDeliveryAt = Date.now() - 4 * HOUR_MS
+  assert.deepEqual((await pollHarness({ orders })).sent, [])
+  storage = {}
+})
+
+test('a rate-limited send waits the time Telegram names and delivers', async () => {
+  // The throw would have ended the run with orders still in hand, and the next
+  // poll would have opened with the same burst.
+  let calls = 0
+  globalThis.fetch = async () => {
+    calls += 1
+    return calls === 1
+      ? {
+        ok: false, status: 429,
+        json: async () => ({ ok: false, description: 'Too Many Requests', parameters: { retry_after: 1 } }),
+      }
+      : { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 7 } }) }
+  }
+  assert.equal(await tgSend('b', '1', 'hello'), 7)
+  assert.equal(calls, 2)
+})
+
+test('a rate limit longer than the worker lives is a failure, not a wait', async () => {
+  // Sleeping through it would be a hang Chrome kills mid-way, with nothing
+  // logged. Refused instead, so the failure is recorded and the next poll tries.
+  globalThis.fetch = async () => ({
+    ok: false, status: 429,
+    json: async () => ({ ok: false, description: 'Too Many Requests', parameters: { retry_after: 3600 } }),
+  })
+  await assert.rejects(tgSend('b', '1', 'hello'), /429/)
+})

@@ -95,6 +95,21 @@
   "hintInterval": {
     "message": "Chrome 이 실행 중일 때만 동작하며, 로그인된 Play Console 세션을 그대로 씁니다."
   },
+  "lblDeliverySchedule": {
+    "message": "전달 주기 정하기"
+  },
+  "lblDeliveryEvery": {
+    "message": "주기 (시간)"
+  },
+  "lblDeliveryAt": {
+    "message": "시작 시각"
+  },
+  "lblDeliveryPaused": {
+    "message": "전달 일시 정지 (고장 알림은 계속 옵니다)"
+  },
+  "dlvHours": {
+    "message": "$1시간마다"
+  },
   "lblDays": {
     "message": "조회 기간 (일)"
   },
@@ -173,6 +188,21 @@
   "statusNoAlarm": {
     "message": "예약이 등록되지 않았습니다. 저장을 눌러 다시 거세요."
   },
+  "statusPaused": {
+    "message": "전달 일시 정지됨"
+  },
+  "statusDeliveryNow": {
+    "message": "찾는 즉시 전달"
+  },
+  "statusDeliveryEvery": {
+    "message": "$2 기준 $1시간마다 전달 — 다음 $3"
+  },
+  "statusDeliveryDaily": {
+    "message": "매일 $1 전달 — 다음 $2"
+  },
+  "statusDeliverySoon": {
+    "message": "다음 확인 때"
+  },
   "resultNew": {
     "message": "새 주문 $1 건, 조회 $2 건."
   },
@@ -181,6 +211,12 @@
   },
   "resultFirst": {
     "message": "첫 동기화: 주문 $1 건을 알림 없이 기록했습니다."
+  },
+  "resultHeld": {
+    "message": "새 주문 $1건을 모아뒀습니다. 전달 주기가 되면 보냅니다."
+  },
+  "resultPaused": {
+    "message": "새 주문 $1건이 대기 중입니다. 전달이 일시 정지되어 있습니다."
   },
   "notifNewOrder": {
     "message": "구매"
@@ -205,9 +241,6 @@
   },
   "tgSettled": {
     "message": "Play 정산액이 추정치와 달랐습니다 · $1건, 누계 $2"
-  },
-  "tgMore": {
-    "message": "…외 $1 건이 더 있습니다."
   },
   "tgFailHeader": {
     "message": "카칭이 동작하지 않고 있습니다."
@@ -256,6 +289,12 @@
   },
   "logOrder": {
     "message": "전송: $1 ($2)"
+  },
+  "logHeld": {
+    "message": "$1건 대기 — 전달 주기를 기다리는 중"
+  },
+  "logPaused": {
+    "message": "$1건 대기 — 전달 일시 정지됨"
   },
   "logRecovered": {
     "message": "복구됨"

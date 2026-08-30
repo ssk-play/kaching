@@ -146,6 +146,8 @@ with it — until a `/recount` of that day supersedes them.
 | API base URL | `https://api.openai.com/v1` | Any OpenAI-compatible service |
 | Model | `gpt-4o-mini` | Whatever that service calls it |
 | Check every | 10 min | Only runs while Chrome is open |
+| Deliver on a schedule | off | On, the messages are held and sent in one batch: starts at 05:00, every 24 h is one message a day at five. The tally never waits either way |
+| Pause delivery | off | Stops the order messages only — failure alerts still come through |
 | Look back | 2 days | How far back each check reads |
 | Sender label | — | Prefixed to every message, for a shared chat |
 
