@@ -485,6 +485,9 @@
   "cmdAiNothing": {
     "message": "No answer came back. Try asking again."
   },
+  "cmdAiFailed": {
+    "message": "Could not answer that: $1"
+  },
   "logAsked": {
     "message": "a question"
   },

@@ -817,10 +817,14 @@ async function answerQuestion(s, said) {
       },
     }
   } catch (err) {
+    // Named as what it is. This used to borrow the order-fetch wording, so a
+    // model that timed out was reported as "could not read the orders" — which
+    // sends the reader to their Play session, the one thing that was working.
+    //
     // Said, but not remembered. Replayed as the assistant's own words on the next
     // question, "could not reach the API" would read to the model as something
     // it had once said about the tally.
-    return { reply: t('tgFailOther', String(err?.message ?? err)) }
+    return { reply: t('cmdAiFailed', String(err?.message ?? err)) }
   }
 }
 
