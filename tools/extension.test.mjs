@@ -61,7 +61,7 @@ const { chatsIn, menuFingerprint, MENU, send: tgSend, BURST } = await load('tele
 const O = await load('orders.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
-const { rangeOf, byCurrency, byKind, MAX_RANGE_DAYS, tools: ledgerTools } = await load('ledger.js')
+const { rangeOf, byCurrency, byKind, MAX_ROWS, tools: ledgerTools } = await load('ledger.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
   summarize, compacted, RECAP, probe, CARRIES_BOTH, DROPS_TOOLS, DROPS_SYSTEM,
@@ -1221,7 +1221,7 @@ test('the ledger read reports a day that sold nothing, not just the days that di
   const { totals, adjustments } = ledger()
   const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
   assert.deepEqual(
-    out.days.map((d) => [d.day, d.amount ?? 0]),
+    out.rows.map((d) => [d.day, d.amount ?? 0]),
     [
       ['2026-08-20', 1000],
       ['2026-08-21', 0],
@@ -1238,13 +1238,13 @@ test('the ledger read says nothing about days before the tally began', () => {
   // Not zeroes: those days have no entry because nothing was counting yet, and
   // reporting them as zero would be reporting a drought that never happened.
   assert.equal(out.since, '2026-08-20')
-  assert.equal(out.days[0].day, '2026-08-20')
-  assert.equal(out.days.length, 3)
+  assert.equal(out.rows[0].day, '2026-08-20')
+  assert.equal(out.rows.length, 3)
 })
 
 test('an empty tally is said to be empty rather than answered with zeroes', () => {
   const out = rangeOf({}, {}, { from: '2026-08-01', to: '2026-08-02' }, '2026-08-25')
-  assert.deepEqual(out.days, [])
+  assert.deepEqual(out.rows, [])
   assert.equal(out.since, null)
   assert.ok(out.note)
 })
@@ -1254,30 +1254,65 @@ test('a range reaching into the future is trimmed to today, not refused', () => 
   // "this week" ends on Saturday; the question is still about the days that have
   // happened, so the days that have not are simply not there.
   const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-31' }, '2026-08-21')
-  assert.equal(out.days.at(-1).day, '2026-08-21')
+  assert.equal(out.rows.at(-1).day, '2026-08-21')
   // A range that is entirely in the future has nothing to trim to.
   assert.ok(rangeOf(totals, adjustments, { from: '2026-09-01', to: '2026-09-02' }, '2026-08-21').error)
 })
 
-test('an over-long range comes back as something the model can act on', () => {
-  // A tally that really does hold a year: the floor moves nothing, so the cap is
-  // what stands between one question and a year of rows.
+test('a range too wide for its grain is widened, never refused', () => {
+  // A tally that really does hold a year: the floor moves nothing, so this is a
+  // year of days being asked for. Refused, the model's only move is to ask again
+  // for less — and it has four turns to spend on the whole question.
   const old = T.record({}, '2026-01-01', { net: { currency: 'KRW', amount: 100 }, currency: 'KRW' })
   const out = rangeOf(old, {}, { from: '2026-01-01', to: '2026-12-31' }, '2026-12-31')
-  assert.match(out.error, new RegExp(String(MAX_RANGE_DAYS)))
-  assert.ok(!out.days)
-  // A malformed date is refused the same way rather than throwing into the loop.
+  assert.ok(!out.error)
+  // Days would be 365 rows, weeks 53, so weeks is where it lands.
+  assert.equal(out.groupedBy, 'week')
+  assert.ok(out.rows.length <= MAX_ROWS)
+  // And it says so, because a week quoted as a day is a wrong answer that reads
+  // like a right one.
+  assert.equal(out.rows[0].day, undefined)
+  assert.ok(out.rows[0].from && out.rows[0].to)
+  // A malformed date is still refused rather than thrown into the loop.
   assert.ok(rangeOf({}, {}, { from: 'last monday', to: '2026-08-22' }, '2026-08-25').error)
+  assert.ok(rangeOf({}, {}, { from: '2026-08-01', to: '2026-08-22', groupBy: 'fortnight' }, '2026-08-25').error)
 })
 
-test('the cap counts the rows that would be emitted, not the years asked about', () => {
-  // "How did this year go" against a days-old install is a handful of rows. The
-  // refusal would cost a turn teaching the model a start date it does not name.
+test('the grain follows the rows that would be emitted, not the years asked about', () => {
+  // "How did this year go" against a days-old install is a handful of rows, so
+  // it stays by day rather than being rounded up to weeks nobody asked for.
   const { totals, adjustments } = ledger()
   const out = rangeOf(totals, adjustments, { from: '2026-01-01', to: '2026-08-25' }, '2026-08-25')
   assert.ok(!out.error)
-  assert.equal(out.days.length, 6)
-  assert.ok(out.days.length <= MAX_RANGE_DAYS)
+  assert.equal(out.groupedBy, 'day')
+  assert.equal(out.rows.length, 6)
+  assert.ok(out.rows.length <= MAX_ROWS)
+})
+
+test('a week is added up here, not by the model', () => {
+  // The whole reason this exists: asked for eight weeks, gpt-5-4-mini read the
+  // days and summed them itself, and three of the eight came out wrong — 5% off
+  // over the range. A wrong figure stated confidently is worse than a refusal,
+  // and neither is necessary when the addition happens in JS.
+  let totals = {}
+  for (let d = 1; d <= 28; d += 1) {
+    const day = `2026-08-${String(d).padStart(2, '0')}`
+    totals = T.record(totals, day, { net: { currency: 'KRW', amount: 1000 }, currency: 'KRW' })
+  }
+  const out = rangeOf(totals, {}, { from: '2026-08-01', to: '2026-08-28', groupBy: 'week' }, '2026-08-28')
+  assert.equal(out.groupedBy, 'week')
+  // Weeks start on Sunday, and 2026-08-01 is a Saturday — so the first row is
+  // that one day, clipped to the range rather than reported as a whole week.
+  assert.deepEqual(out.rows[0], { from: '2026-08-01', to: '2026-08-01', currency: 'KRW', amount: 1000, orders: 1 })
+  assert.equal(out.rows[1].from, '2026-08-02')
+  assert.equal(out.rows[1].to, '2026-08-08')
+  assert.equal(out.rows[1].amount, 7000)
+  assert.equal(out.rows[1].orders, 7)
+  // Nothing is lost or double counted at the seams.
+  assert.equal(out.rows.reduce((sum, r) => sum + r.amount, 0), 28000)
+  const byMonth = rangeOf(totals, {}, { from: '2026-08-01', to: '2026-08-28', groupBy: 'month' }, '2026-08-28')
+  assert.equal(byMonth.rows.length, 1)
+  assert.equal(byMonth.rows[0].amount, 28000)
 })
 
 // One canned exchange per fetch, so a test says exactly how many turns it expects.
@@ -1441,13 +1476,13 @@ test('a correction earlier than the first announced order is not clipped out', (
   const adjustments = T.adjust({}, '2026-08-10', { currency: 'KRW', amount: 9000 })
   const out = rangeOf(totals, adjustments, { from: '2026-08-01', to: '2026-08-22' }, '2026-08-25')
   assert.equal(out.since, '2026-08-10')
-  assert.equal(out.days[0].day, '2026-08-10')
-  assert.equal(out.days[0].amount, 9000)
+  assert.equal(out.rows[0].day, '2026-08-10')
+  assert.equal(out.rows[0].amount, 9000)
 
   // The sharp case: a tally with nothing announced at all still has the
   // correction to report, and saying it has no days would contradict /today.
   const only = rangeOf({}, adjustments, { from: '2026-08-01', to: '2026-08-10' }, '2026-08-25')
-  assert.deepEqual(only.days, [{ day: '2026-08-10', currency: 'KRW', amount: 9000, orders: 0 }])
+  assert.deepEqual(only.rows, [{ day: '2026-08-10', currency: 'KRW', amount: 9000, orders: 0 }])
 })
 
 test('a day that never happened is refused, not walked past', () => {
@@ -1472,7 +1507,7 @@ test('a bucket key that does not parse cannot take every question down', () => {
   const adjustments = T.adjust({}, '2026-00-15', { currency: 'KRW', amount: 5000 })
   const out = rangeOf(totals, adjustments, { from: '2026-08-20', to: '2026-08-22' }, '2026-08-25')
   assert.equal(out.since, '2026-08-20')
-  assert.equal(out.days.length, 3)
+  assert.equal(out.rows.length, 3)
 })
 
 test('a range written backwards is told so, not told the days are in the future', () => {
@@ -1487,7 +1522,7 @@ test('one day reads the same whether /today or the model asks for it', () => {
   const { totals, adjustments } = ledger()
   // The whole point of the shared fold: two answers about the same date cannot
   // come from two expressions that could drift apart.
-  const row = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-22' }, '2026-08-25').days[0]
+  const row = rangeOf(totals, adjustments, { from: '2026-08-22', to: '2026-08-22' }, '2026-08-25').rows[0]
   assert.equal(row.amount, T.dayOf(totals, adjustments, '2026-08-22').amount)
 })
 
@@ -1699,9 +1734,9 @@ test('one currency is answerable over the whole history, in one read', () => {
   assert.equal(out.since, '2026-06-01')
   assert.equal(out.from, '2026-06-01')
   assert.equal(out.to, '2026-08-25')
-  // Eighty-five days — well past what the daily read will hand over at once,
-  // which is the whole reason this one has no such ceiling.
-  assert.ok(85 > MAX_RANGE_DAYS)
+  // Eighty-five days — more rows than the daily read will hand over at once, so
+  // that one would answer this by the week and this one answers it in a line.
+  assert.ok(85 > MAX_ROWS)
   // Biggest first: a question about currencies is a question about which ones
   // matter.
   assert.deepEqual(out.currencies.map((c) => c.currency), ['USD', 'INR'])
@@ -1731,7 +1766,7 @@ test('the split adds back up to the days it was split from', () => {
   const sameSpan = byCurrency(totals, adjustments, { from: '2026-06-25' }, '2026-08-25')
   assert.equal(
     sameSpan.currencies.reduce((n, c) => n + c.amount, 0) + (sameSpan.corrections ?? 0),
-    daily.days.reduce((n, d) => n + (d.amount ?? 0), 0),
+    daily.rows.reduce((n, d) => n + (d.amount ?? 0), 0),
   )
   assert.equal(rows, 12000 + 8000 + 5000 - 5000 + 30000)
 })
