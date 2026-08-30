@@ -64,7 +64,7 @@ const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, byKind, MAX_ROWS, tools: ledgerTools } = await load('ledger.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
-  summarize, compacted, RECAP,
+  summarize, compacted, RECAP, probe, CARRIES_BOTH, DROPS_TOOLS, DROPS_SYSTEM,
 } = await load('llm.js')
 
 // One wide span rather than a window per glyph. Half the pictograms this
@@ -1415,6 +1415,66 @@ test('a model that keeps reading is cut off rather than left to spend', async ()
   // finished gathering.
   assert.equal(out, messages.cmdAiGaveUp.message)
 })
+
+test('an endpoint that carries the question is told from one that does not', async () => {
+  // The failure this exists for is invisible in the answer. A gateway that
+  // forwards only the last user message still returns 200 with fluent prose in
+  // it, so the settings test went green while the chat could not read a figure —
+  // and the only way anyone found out was by arguing with the bot about the
+  // stock market.
+  const calls = (name) => ({
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name, arguments: '{"word":"KACHING-OK"}' } }] },
+    }],
+  })
+  const where = { apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm' }
+
+  // The ping came back as a tool call, which takes both the system prompt and
+  // the tool list to have arrived.
+  stubApi([calls('ping')])
+  assert.equal(await probe(where), CARRIES_BOTH)
+
+  // The word alone: the instruction landed, so the system message is getting
+  // through and the tool list is not.
+  stubApi([says('KACHING-OK')])
+  assert.equal(await probe(where), DROPS_TOOLS)
+
+  // Neither. The observed shape of a gateway that flattens the request down to
+  // its last user message, which answers a question about a sales tally with a
+  // question about which stock you meant.
+  stubApi([says('어떤 자산의 최근 8주 주간 수익률을 말씀하시나요?')])
+  assert.equal(await probe(where), DROPS_SYSTEM)
+
+  // A tool call, but not the one that was asked for, is not proof the ping
+  // arrived — a model calling something else may never have seen it.
+  stubApi([calls('read_totals')])
+  assert.equal(await probe(where), DROPS_SYSTEM)
+})
+
+test('the probe asks for the one tool it checks for, under a system message', async () => {
+  // Sent as the real thing rather than as a ping to a health endpoint: a key
+  // that authenticates against a service which cannot call a tool looks fine to
+  // anything less.
+  const sent = stubApi([calls_ok()])
+  await probe({ apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm' })
+  const [body] = sent
+  assert.equal(body.messages[0].role, 'system')
+  assert.equal(body.tools.length, 1)
+  assert.equal(body.tools[0].function.name, 'ping')
+  // No tool_choice: forcing the call would prove the endpoint can be made to
+  // send one, not that it forwarded the instruction that asked for it.
+  assert.equal(body.tool_choice, undefined)
+})
+
+function calls_ok() {
+  return {
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ping', arguments: '{"word":"KACHING-OK"}' } }] },
+    }],
+  }
+}
 
 test('the API says why it refused, and that reaches the chat', async () => {
   globalThis.fetch = async () => ({

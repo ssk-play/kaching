@@ -208,6 +208,60 @@ export async function summarize({ apiKey, baseUrl, model }, turns) {
   return textOf(reply.choices?.[0]?.message).slice(0, MAX_SUMMARY)
 }
 
+// Does this endpoint actually carry a question, or only the last sentence of
+// one? Every figure here is read with a tool, under a system prompt that says
+// which tools and what the days mean — so an endpoint that quietly drops either
+// leaves the model answering about Google Play sales with no Google Play sales
+// in front of it. Which it does: it answers, fluently, about the stock market.
+//
+// Worth a call of its own because that failure is invisible from the answer. A
+// gateway that strips these still returns 200 with prose in it, so the test
+// button went green while the chat was unusable, and the only way anyone found
+// out was by arguing with it.
+//
+// One round trip proves both, and tells them apart: a ping that comes back as a
+// tool call means the system prompt reached the model *and* the tool list did;
+// the word alone means the tools were dropped; neither means the system message
+// never arrived.
+const PING_WORD = 'KACHING-OK'
+const PING = {
+  type: 'function',
+  function: {
+    name: 'ping',
+    description: 'Report back the word you were given.',
+    parameters: {
+      type: 'object',
+      properties: { word: { type: 'string' } },
+      required: ['word'],
+    },
+  },
+}
+const PING_SYSTEM =
+  'You are a connection test, not an assistant. Do exactly one thing: call the tool named ' +
+  `ping once, with word set to ${PING_WORD}. Add no other text.`
+
+export const CARRIES_BOTH = 'ok'
+export const DROPS_TOOLS = 'tools'
+export const DROPS_SYSTEM = 'system'
+
+export async function probe({ apiKey, baseUrl, model }) {
+  const reply = await call({ apiKey, baseUrl }, {
+    model,
+    max_tokens: MAX_TOKENS,
+    tools: [PING],
+    messages: [
+      { role: 'system', content: PING_SYSTEM },
+      { role: 'user', content: 'Run the connection test.' },
+    ],
+  })
+  const said = reply.choices?.[0]?.message
+  if ((said?.tool_calls ?? []).some((c) => c.function?.name === 'ping')) return CARRIES_BOTH
+  // The instruction landed but the tool list did not, so the model said the word
+  // instead of calling with it.
+  if (textOf(said).toUpperCase().includes(PING_WORD)) return DROPS_TOOLS
+  return DROPS_SYSTEM
+}
+
 export async function ask({ apiKey, baseUrl, model, question, today, tools, history = [] }) {
   // Replayed as plain sentences. What the model actually said and did on those
   // turns — which days it read, in how many calls — is not carried: it can read
