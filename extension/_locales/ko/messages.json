@@ -485,6 +485,9 @@
   "cmdAiNothing": {
     "message": "답을 받지 못했습니다. 다시 물어봐 주세요."
   },
+  "cmdAiFailed": {
+    "message": "질문에 답하지 못했습니다: $1"
+  },
   "logAsked": {
     "message": "질문"
   },
