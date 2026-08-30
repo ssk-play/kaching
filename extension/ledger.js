@@ -7,26 +7,66 @@
 // wrong ledger; a wrong read is only a wrong sentence, which the figures quoted
 // beside it give the reader a way to catch.
 import {
-  dayOf, startedAt, shift, sumRange, isDay, UNKNOWN_CURRENCY,
+  startedAt, shift, sumRange, combine, weekStart, isDay, UNKNOWN_CURRENCY,
   KIND_BUY, KIND_SUB, KIND_RENEWAL,
 } from './totals.js'
 import { foldDays, readAll } from './orders.js'
 import { load, zoneOf } from './settings.js'
 
-// Long enough for "the last two months", short enough that no single question
-// can pull a year of days into the request. A wider question is answered by
-// asking again, which the refusal below says.
-export const MAX_RANGE_DAYS = 62
+// What a range costs is the rows it emits, not the days it names — so that is
+// what is capped. Three years asked for by day would be 1,100 rows and some
+// 22,000 tokens, resent on every turn of the question; the same three years by
+// month is 36 rows and 2,300 characters.
+//
+// So no range is ever refused. A span too wide for the grain asked for is
+// answered at the next grain up, and the answer says which one it came back at.
+// A refusal would only send the model round again to ask for less, and it has
+// four turns to spend on the whole question.
+export const MAX_ROWS = 62
 
-const MS_PER_DAY = 86_400_000
+// Coarsest last. Every step up divides the row count by roughly seven, twelve
+// and thirty, so two steps cover anything this tally can hold.
+export const GRAINS = ['day', 'week', 'month', 'year']
 
-const spanDays = (from, to) => (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / MS_PER_DAY + 1
+// Weeks start on Sunday because /week does, and a week the model reports and a
+// week the command reports have to be the same seven days.
+const startOfGroup = (day, grain) =>
+  grain === 'week' ? weekStart(day)
+    : grain === 'month' ? `${day.slice(0, 7)}-01`
+      : grain === 'year' ? `${day.slice(0, 4)}-01-01`
+        : day
+
+function nextGroup(start, grain) {
+  if (grain === 'day') return shift(start, 1)
+  if (grain === 'week') return shift(start, 7)
+  const [y, m] = start.split('-').map(Number)
+  if (grain === 'month') return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`
+  return `${y + 1}-01-01`
+}
+
+// Walked rather than divided: a month is not a fixed number of days, and a week
+// that starts before the range does still counts as one row.
+function countGroups(first, last, grain) {
+  let n = 0
+  for (let g = startOfGroup(first, grain); g <= last; g = nextGroup(g, grain)) n += 1
+  return n
+}
+
+// The finest grain that fits, starting from the one asked for. Never finer than
+// asked: someone who wants months does not want days because they happen to fit.
+function grainFor(first, last, want) {
+  const from = Math.max(0, GRAINS.indexOf(want))
+  for (let i = from; i < GRAINS.length; i += 1) {
+    if (countGroups(first, last, GRAINS[i]) <= MAX_ROWS) return GRAINS[i]
+  }
+  return GRAINS[GRAINS.length - 1]
+}
 
 // Zeroes are dropped rather than printed. A row per day is what makes "which day
 // sold nothing" answerable, but spelling out four zero fields on each of them
 // buries the days that did sell in the days that did not.
-function row(day, figures) {
-  const out = { day, currency: figures.currency, amount: figures.amount, orders: figures.orders }
+function row(head, figures) {
+  const out = { ...head, currency: figures.currency, amount: figures.amount, orders: figures.orders }
   if (!figures.currency) delete out.currency
   if (figures.refunds) out.refunds = figures.refunds
   if (figures.refunded) out.refunded = figures.refunded
@@ -75,30 +115,49 @@ function resolve(totals, adjustments, { from, to }, today) {
   return { since, first: from < since ? since : from, last }
 }
 
-// Announced orders plus hand-entered corrections, day by day.
-export function rangeOf(totals, adjustments, { from, to }, today) {
+// Announced orders plus hand-entered corrections, a row per day, week, month or
+// year. The grain is the caller\'s to ask for and this function\'s to widen: what
+// comes back always says which one it is.
+export function rangeOf(totals, adjustments, { from, to, groupBy }, today) {
   if (!isDay(from) || !isDay(to)) {
     return { error: 'from and to must be real dates in YYYY-MM-DD form' }
   }
+  if (groupBy != null && !GRAINS.includes(groupBy)) {
+    return { error: `groupBy must be one of ${GRAINS.join(', ')}` }
+  }
   const span = resolve(totals, adjustments, { from, to }, today)
   if (span.error) return span
-  if (!span.since) return { since: null, days: [], note: 'the tally has no days recorded yet' }
+  if (!span.since) return { since: null, rows: [], note: 'the tally has no days recorded yet' }
   const { since, first, last } = span
-  // Measured after the floor, so the cap counts the rows this would actually
+  // Chosen after the floor, so the grain follows the rows this will actually
   // emit rather than the years the question happened to name. "How did this year
-  // go" against a fortnight-old install is a fortnight of rows, and refusing it
-  // would cost a turn teaching the model a start date the refusal does not name.
-  // A long-lived tally is still refused: there the floor moves nothing.
-  const days = spanDays(first, last)
-  if (days > MAX_RANGE_DAYS) {
-    return { error: `that is ${days} days; ask for ${MAX_RANGE_DAYS} or fewer at a time` }
-  }
+  // go" against a fortnight-old install is a fortnight of days.
+  const grain = grainFor(first, last, groupBy ?? 'day')
 
-  const out = []
-  for (let day = first; day <= last; day = shift(day, 1)) {
-    out.push(row(day, dayOf(totals, adjustments, day)))
+  const rows = []
+  for (let g = startOfGroup(first, grain); g <= last; g = nextGroup(g, grain)) {
+    // Clipped to the range at both ends, so a week reaching past today or back
+    // before counting began is reported as the part of it that happened rather
+    // than as a full week that came up short.
+    const opens = g < first ? first : g
+    const shuts = shift(nextGroup(g, grain), -1)
+    const closes = shuts > last ? last : shuts
+    const figures = combine(
+      sumRange(totals, opens, closes),
+      sumRange(adjustments, opens, closes),
+    )
+    rows.push(row(grain === 'day' ? { day: opens } : { from: opens, to: closes }, figures))
   }
-  return { since, days: out }
+  return {
+    since,
+    groupedBy: grain,
+    // Said only when it differs from what was asked for, because a note under
+    // every answer is noise — and this one has to be read when it appears.
+    ...(groupBy && groupBy !== grain
+      ? { note: `${groupBy} would have been more than ${MAX_ROWS} rows, so this is by ${grain}` }
+      : {}),
+    rows,
+  }
 }
 
 // There is no "these days predate the split" gap here any more, and no field
@@ -186,9 +245,18 @@ export const byKind = (totals, adjustments, range, today) =>
 const READ_TOTALS = {
   name: 'read_totals',
   description:
-    "Daily totals from this bot's own tally, one row per day in the range, oldest first. " +
+    "Totals from this bot's own tally over a range, oldest first, in \"rows\". " +
     'Built from the orders the bot announced, anything a /recount pulled in from Play, and ' +
-    'corrections entered with /adjust. Fields, all omitted when zero except "day": ' +
+    'corrections entered with /adjust. ' +
+    'Set "groupBy" to day, week, month or year and each row is one of those — so a question ' +
+    'about weekly or monthly figures is answered by asking for them here, NOT by adding days ' +
+    'up yourself. Weeks start on Sunday. There is no limit on the range: ask for whatever ' +
+    'was asked about. If the grain you chose would run past ' +
+    String(MAX_ROWS) +
+    ' rows the answer comes back at the next grain up, and "groupedBy" always says which ' +
+    'grain it really is — read it before quoting anything. A row is {"day"} when grouped by ' +
+    'day and {"from","to"} otherwise, clipped to the range, so the first and last row of a ' +
+    'weekly answer may be part weeks. Fields, all omitted when zero: ' +
     '"amount" is the day\'s net in the developer\'s payout currency, with refunds ALREADY ' +
     'subtracted — never take "refunded" off it again. "orders" counts charges only. ' +
     '"refunds" counts reversals, which are not in "orders". "refunded" is what those ' +
@@ -200,6 +268,11 @@ const READ_TOTALS = {
     properties: {
       from: { type: 'string', description: 'First day of the range, YYYY-MM-DD' },
       to: { type: 'string', description: 'Last day of the range, YYYY-MM-DD' },
+      groupBy: {
+        type: 'string',
+        enum: ['day', 'week', 'month', 'year'],
+        description: 'One row per day, week, month or year. Defaults to day.',
+      },
     },
     required: ['from', 'to'],
     additionalProperties: false,
@@ -211,10 +284,7 @@ const READ_BY_CURRENCY = {
   description:
     "This bot's own tally split by the currency the buyer paid in, one row per " +
     'currency, biggest first. Use this — not read_totals — for any question about a ' +
-    'single currency, a country, or how the currencies compare, and for a total over ' +
-    'more than ' +
-    String(MAX_RANGE_DAYS) +
-    ' days: there is no limit on the range here. Both "from" and "to" are optional and ' +
+    'single currency, a country, or how the currencies compare. Both "from" and "to" are optional and ' +
     'default to the whole recorded history, so omit them for an all-time figure. ' +
     'Amounts are in "payoutCurrency", the developer\'s own — NOT in the row\'s currency, ' +
     'which only says who paid. Fields per row, omitted when zero except "currency" and ' +
@@ -244,8 +314,8 @@ const READ_BY_KIND = {
   description:
     "This bot's own tally split by what kind of sale each order was, one row per kind, " +
     'biggest first. Use this — not read_totals — for any question about subscriptions, ' +
-    'renewals or one-off purchases, including how many there were: there is no limit on ' +
-    'the range here. Both "from" and "to" are optional and default to the whole recorded ' +
+    'renewals or one-off purchases, including how many there were. ' +
+    'Both "from" and "to" are optional and default to the whole recorded ' +
     'history. The "kind" of a row is "' +
     KIND_RENEWAL +
     '" for a subscription charge after the first one, "' +
