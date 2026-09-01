@@ -276,6 +276,41 @@ test('every element the options page reaches for is in the options page', () => 
   }
 })
 
+test('every field the options page saves has an input and a default', () => {
+  // The id scan above only sees $('literal'). Four lists — checkboxes, texts,
+  // numbers, selects — are walked with $(id) instead, so a field added to one of
+  // them and not to the HTML slips past it and blanks the page on load, which is
+  // exactly the shape of the mistake the scan exists to catch.
+  const js = fs.readFileSync(path.join(EXT, 'options.js'), 'utf8')
+  const html = fs.readFileSync(path.join(EXT, 'options.html'), 'utf8')
+  const present = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]))
+
+  const listed = (name) => {
+    const at = js.indexOf(`const ${name} = `)
+    assert.ok(at !== -1, `options.js has no ${name}`)
+    const open = js.indexOf(name === 'NUMBERS' ? '{' : '[', at)
+    const shut = js.indexOf(name === 'NUMBERS' ? '}' : ']', open)
+    return [...js.slice(open, shut).matchAll(/'([^']+)'|^\s*(\w+):/gm)].map((m) => m[1] ?? m[2])
+  }
+
+  const fields = ['CHECKBOXES', 'TEXTS', 'PICKS', 'NUMBERS'].flatMap(listed)
+  assert.ok(fields.length > 15, 'the field scan found nothing, so it is checking nothing')
+  for (const id of fields) {
+    assert.ok(present.has(id), `options.html has no #${id}`)
+    // And a field with no default reads back as undefined, which saves as
+    // undefined and is then read as undefined everywhere it is used.
+    assert.ok(id in DEFAULTS, `settings.js has no default for ${id}`)
+  }
+})
+
+test('the recovery notice is off unless it is asked for', () => {
+  // The only message here that reports nothing happening. The outage notice
+  // earns its interruption because silence looks exactly like a quiet sales
+  // day; "it works again" is read by someone who has already seen the orders
+  // start arriving.
+  assert.equal(DEFAULTS.sayRecovered, false)
+})
+
 test('nothing in the extension reads a day without naming the zone', () => {
   // The guard the argument cannot give on its own. dayKey throws on a missing
   // zone, but only when that line runs — and the line that files an order into a

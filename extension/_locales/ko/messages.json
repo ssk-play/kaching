@@ -119,6 +119,12 @@
   "lblVerbose": {
     "message": "회차마다 결과를 텔레그램으로 보내기"
   },
+  "lblSayRecovered": {
+    "message": "다시 동작하기 시작하면 알리기"
+  },
+  "hintSayRecovered": {
+    "message": "기본값은 끔입니다. 장애 알림은 항상 갑니다 — 이건 장애가 끝났다는 후속 알림이고, 보통은 주문이 다시 도착하는 것으로 이미 알게 됩니다."
+  },
   "hintVerbose": {
     "message": "살아 있는지 확인하는 용도입니다. 믿을 만해지면 끄세요."
   },

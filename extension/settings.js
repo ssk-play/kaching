@@ -42,6 +42,13 @@ export const DEFAULTS = {
   showUtcTime: false,
   showBreakdown: false,
   showDailyTotal: true,
+  // Off, because it is the only message here that reports nothing happening.
+  // The outage notice earns its interruption — silence is indistinguishable
+  // from a quiet sales day, so nothing else would tell you. "Recovered" is read
+  // after the fact by someone who has already seen the orders start arriving
+  // again, and a notifier people learn to swipe away is one they will swipe
+  // away on the day it matters.
+  sayRecovered: false,
 
   // questions
   //

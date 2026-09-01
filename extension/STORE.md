@@ -76,7 +76,7 @@ still working?" without opening a console.
 
 A notification tool that dies quietly is worse than none — silence looks exactly
 like a slow sales day. If Kaching cannot read your orders three times running,
-it says so, and tells you when it recovers.
+it says so, and can tell you when it starts working again if you turn that on.
 
 **Requirements**
 

@@ -78,7 +78,7 @@ $('deliveryPresets').append(
 
 const CHECKBOXES = [
   'notifyCharged', 'notifyRefunded', 'showLocalTime', 'showUtcTime', 'showBreakdown',
-  'showDailyTotal', 'deliveryScheduled', 'deliveryPaused', 'verbose',
+  'showDailyTotal', 'deliveryScheduled', 'deliveryPaused', 'sayRecovered', 'verbose',
 ]
 const NUMBERS = {
   intervalMinutes: [1, 120],
