@@ -68,10 +68,12 @@ const system = (today, canWrite) =>
     'rather than guessing a recent one — a guess answers zero for everything older than',
     'itself, and "none" is a wrong answer that reads exactly like a right one. If you do',
     'narrow a range, say in your answer which days you read.',
-    'read_expected is the one tool that answers about days that have not happened: what the',
-    'subscriptions on record are due to bill. It is a ceiling, not a forecast — it cannot see',
-    'a cancellation — so give the figure and that caveat in the same breath, never the figure',
-    'alone and never the caveat as a footnote under it.',
+    'read_expected is the one tool that answers about days that have not happened. It gives a',
+    'month in three parts: what it has already earned, what subscriptions are scheduled to',
+    'bill, and what the rest of it would take at the rate of recent trade. Quote the parts,',
+    'not just the total — the first is a fact, the second cannot see a cancellation, and the',
+    'third is a run rate off a window the answer names. Give the figure and what it rests on',
+    'in the same breath, never the figure alone and never the caveat as a footnote under it.',
     ...(canWrite
       ? [
         'run_recount fetches a span from Play again and rebuilds the tally from it. It writes,',

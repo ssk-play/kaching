@@ -23,7 +23,7 @@ import {
 // offer exactly the same words.
 const KINDS = [KIND_BUY, KIND_SUB, KIND_RENEWAL]
 import { foldDays, readAll } from './orders.js'
-import { expected as expectedFrom, PERIODS } from './subs.js'
+import { expected as expectedFrom, recentRate, PERIODS } from './subs.js'
 import { load, zoneOf } from './settings.js'
 
 // What a range costs is the rows it emits, not the days it names — so that is
@@ -395,6 +395,24 @@ const READ_BY_CURRENCY = {
 // Bounded to a day or a month, not because a year would break anything but
 // because the model is holding a chat open while this runs. A year of Play
 // requests outlives the question that asked for it.
+// Days OF THE RANGE still to come — not days between now and its end. A range
+// that has not started yet is the trap: asked about a single day at Christmas,
+// counting from today gave a hundred and fourteen days of trade and answered
+// with a hundred and fourteen days of money.
+//
+// Today is not one of them either: it is part-done and already inside
+// chargedSoFar, so counting it again at a full day's rate bills the morning
+// twice.
+function daysLeft(from, to, today) {
+  // The first day still to come: tomorrow, or the day the range opens if that is
+  // later. Counted inclusively from there — a range wholly ahead has all of its
+  // days left, including its first, and a single future day is one day and not
+  // none.
+  const opens = from > today ? from : shift(today, 1)
+  if (to < opens) return 0
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${opens}T00:00:00Z`)) / 86_400_000) + 1
+}
+
 // What the range has already earned, scoped to the plan being asked about. Read
 // off the crossed split rather than the day totals so that "monthly" means the
 // monthly rows and not the whole day.
@@ -470,8 +488,13 @@ const READ_EXPECTED = {
     '"chargedSoFarFromSubscriptions" and "totalFromSubscriptions" are the same two counting ' +
     'subscription charges only: quote THOSE whenever the question says subscriptions or ' +
     'renewals, or you will report every purchase of the month as subscription revenue. ' +
-    '"stillDue" alone is only the days that have not happened, which is nobody\'s question ' +
-    'about a month in progress. "chargedSoFarUncounted", when present, is orders that could ' +
+    '"stillDue" alone is only the renewals scheduled for the days that have not happened. ' +
+    '"newSalesAtRecentRate" is the rest of the range at the daily rate the account has been ' +
+    'trading over the window in "measuredOver" — purchases and new subscriptions, which have ' +
+    'no due date to read and can only be estimated. It is the softest of the three and you ' +
+    'must say which figures are which: what has been earned, what is scheduled, and what is ' +
+    'a run rate. "total" is all three added. ' +
+    '"chargedSoFarUncounted", when present, is orders that could ' +
     'not be converted, so say the figure is short by them. ' +
     'It CANNOT see cancellations, price changes or failed payments, so the projected half ' +
     'is a ceiling and ' +
@@ -642,15 +665,35 @@ export const tools = (today, { recount } = {}) => [
         : null
       const charged = chargedIn(so_far, period)
       const due = ahead.periods.reduce((n, r) => n + r.amount, 0)
+      // What the rest of the range would take at the rate the account has been
+      // trading. Only when the whole range is being asked about: narrowed to one
+      // billing period the question is about subscriptions that exist, and a
+      // run rate of new sales is not part of that answer.
+      const rate = period ? null : recentRate(orders, zone, fx, today)
+      const left = daysLeft(from, to, today)
+      const newSales = rate && left > 0 ? Math.round(rate.perDay * left) : 0
       return {
         ...ahead,
+        ...(rate && left > 0
+          ? {
+            newSalesAtRecentRate: {
+              amount: newSales,
+              daysRemaining: left,
+              perDay: Math.round(rate.perDay),
+              measuredOver: {
+                from: rate.from, to: rate.to, days: rate.days,
+                orders: rate.orders, amount: Math.round(rate.amount),
+              },
+            },
+          }
+          : {}),
         // Named apart so the model cannot report one as the other. The days
         // already counted are facts; only `stillDue` is the projection the
         // `assumes` line is about.
         chargedSoFar: charged.amount,
         chargedSoFarFromSubscriptions: charged.subscriptions,
         stillDue: due,
-        total: charged.amount + due,
+        total: charged.amount + due + newSales,
         totalFromSubscriptions: charged.subscriptions + due,
         // Orders in a currency that could not be converted, so both figures
         // above are short by them. Disclosed for the same reason every other
