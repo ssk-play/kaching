@@ -43,7 +43,12 @@ const MAX_REPLY = 3500
 // user, and the answer is asked to follow the question's language instead of the
 // browser's — the person typing into Telegram is not necessarily sitting at the
 // machine this is running on.
-const system = (today) =>
+// `canWrite` is whether run_recount was among the tools handed in. It is not
+// always: the options page's test button asks its question with nothing to run a
+// recount with. A prompt that described the tool anyway would have the model
+// reach for one that is not in the list, and the connection test would read as a
+// broken endpoint rather than as a tool the caller did not offer.
+const system = (today, canWrite) =>
   [
     "You answer questions about one Google Play developer's own sales tally, in a Telegram chat.",
     `Today is ${today}. Every day is an ISO date in the tally's own time zone, which is`,
@@ -55,17 +60,36 @@ const system = (today) =>
     'you can read it again. read_totals is a total over a range, grouped by day, week, month',
     'or year — whichever the question is about; read_by_currency splits the same money by the',
     'currency the buyer paid in; read_by_kind splits it by whether each sale was a one-off',
-    'purchase, a new subscription or a renewal. All three take any range at all, so ask for',
-    'what was asked about: read_totals with groupBy for a weekly or monthly figure,',
-    'read_by_currency for a question about a currency or a country, and read_by_kind for one',
-    'about subscriptions or renewals.',
+    'purchase, a new subscription or a renewal, and by how often it bills. All of them take',
+    'any range at all, so ask for what was asked about: read_totals with groupBy for a weekly',
+    'or monthly figure, read_by_currency for a question about a currency or a country, and',
+    'read_by_kind for one about subscriptions, renewals, or monthly versus yearly plans.',
+    'A question that names no period is a question about all of it, so leave the range off',
+    'rather than guessing a recent one — a guess answers zero for everything older than',
+    'itself, and "none" is a wrong answer that reads exactly like a right one. If you do',
+    'narrow a range, say in your answer which days you read.',
+    'read_expected is the one tool that answers about days that have not happened: what the',
+    'subscriptions on record are due to bill. It is a ceiling, not a forecast — it cannot see',
+    'a cancellation — so give the figure and that caveat in the same breath, never the figure',
+    'alone and never the caveat as a footnote under it.',
+    ...(canWrite
+      ? [
+        'run_recount fetches a span from Play again and rebuilds the tally from it. It writes,',
+        'so run it only when you are asked to and never to check a figure yourself. Ask for',
+        'the month or day named; if a year or the whole history is wanted, say to type',
+        '"/recount 2026" or "/recount" instead, because that outlives this chat.',
+      ]
+      : [
+        'You can only read here. Asked to recount, adjust or change anything, say that it has',
+        'to be typed as a command — /recount for a refetch, /adjust for a correction.',
+      ]),
     'Say plainly when you cannot answer. If no tool can reach what was asked — a figure per',
-    'app or per product, a country rather than a currency, why a number moved, anything about',
-    'a future day — say that this tally does not record it, name the closest thing it does,',
-    'and stop. Do not answer a near-miss question as though it were the one asked, and do not',
-    'build a figure out of parts that were not measured together. A tool that hands back an',
-    'error or a refusal is the answer: pass on what it said instead of trying another range',
-    'until something comes back.',
+    'app or per product, a country rather than a currency, why a number moved, a day in the',
+    'future that read_expected does not cover — say that this tally does not record it, name',
+    'the closest thing it does, and stop. Do not answer a near-miss question as though it were',
+    'the one asked, and do not build a figure out of parts that were not measured together. A',
+    'tool that hands back an error or a refusal is the answer: pass on what it said instead of',
+    'trying another range until something comes back.',
     'Quote the exact amounts you read, with their currency, so the reader can check the answer',
     'against them. If a day is flagged uncounted, say that its figure is short.',
     'Never add a standing disclaimer about where the figures come from. The reader owns this',
@@ -268,7 +292,7 @@ export async function ask({ apiKey, baseUrl, model, question, today, tools, hist
   // them again for the price of one tool call, and a tool call resent without
   // the result that answered it is a request the API rejects.
   const messages = [
-    { role: 'system', content: system(today) },
+    { role: 'system', content: system(today, tools.some((x) => x.spec.name === 'run_recount')) },
     ...history.flatMap(({ q, a }) => [
       { role: 'user', content: q },
       { role: 'assistant', content: a },

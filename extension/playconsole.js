@@ -61,6 +61,17 @@ function normalize(o) {
   }
 }
 
+// Long enough for a page Play is slow to assemble, short enough that a request
+// which has stalled outright is abandoned while the worker is still alive.
+//
+// Without it a single hung connection is not a slow recount, it is a dead one:
+// nothing calls a chrome.* API while a fetch is outstanding, so thirty seconds
+// of silence tears the service worker down mid-run. The Telegram cursor only
+// moves after a reply lands, so the command that started it is then re-read on
+// the next alarm and run again — and if it was a question, the model is paid for
+// twice. A refusal here is a failure the caller can report and retry once.
+const REQUEST_TIMEOUT_MS = 20_000
+
 async function request({ developerId, days, from, to, pageSize, origin }) {
   const headers = [
     'Content-Type:application/json+protobuf',
@@ -80,6 +91,7 @@ async function request({ developerId, days, from, to, pageSize, origin }) {
     {
       method: 'POST',
       credentials: 'include',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json+protobuf' },
       body: JSON.stringify({
         4: { 1: { 1: String(since), 2: 0 }, 2: { 1: String(until), 2: 0 }, 3: '' },

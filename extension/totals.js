@@ -106,7 +106,8 @@ export function isDay(key) {
 //
 //   (nothing)     everything still worth restating
 //   today         today
-//   20            the 20th of this month
+//   6             June of this year
+//   6월           the same, for anyone typing Korean
 //   08-20         the 20th of August this year
 //   2026-08-20    that day
 //   2026-08       that whole month
@@ -114,14 +115,20 @@ export function isDay(key) {
 //   all           the same as nothing
 //
 // Bare is the whole lot because that is what someone typing a command called
-// "fetch it again" is asking for. Today is one tap away as the day of the month,
-// and by name for anyone who would rather not work out which day that is.
+// "fetch it again" is asking for. Today is by name, since it is the one span
+// short enough that nobody wants to work out its date first.
 //
-// What is missing is read off today, which is what makes the short forms worth
-// having: the day someone wants to recount is nearly always in the month they
-// are standing in. Whether a lone number is a day or a month is settled by its
-// width — four digits is a year, one or two is a day — so nothing here has two
-// readings, and "2026-08" is the only way to say a month.
+// What is missing is filled in from the left — year, then month, then day — and
+// read off today. That is what makes the short forms worth having: the month
+// someone wants to recount is nearly always in the year they are standing in.
+// So a lone number is whatever comes first after the parts it left off: four
+// digits is a year, and one or two is a month.
+//
+// A lone number used to be a day of this month. It changed because of what this
+// command is for — a recount reads a span back out of Play, and the span people
+// ask for is a month or a year far more often than a single day. A day is still
+// one keystroke longer as "08-20", which the refusal below names when a number
+// arrives that is no month.
 //
 // Deliberately not shared with /adjust. There a lone "20" is an amount, and a
 // parser that read it as the twentieth would move a day nobody named.
@@ -129,7 +136,13 @@ const ALL = new Set(['all', '전체', '*'])
 const TODAY = new Set(['today', '오늘'])
 
 export function periodOf(text, today) {
-  const raw = String(text ?? '').trim().toLowerCase()
+  // "6월" says month in the plainest way there is, and the chat this is typed
+  // into is as often Korean as English. Stripped rather than parsed separately,
+  // so it lands on exactly the same rule a bare number does.
+  // Only when digits are left behind. A bare "월" — half of "8월", typed and
+  // sent — would otherwise strip to nothing and read as "recount everything",
+  // which is the two-minute refetch of the whole history.
+  const raw = String(text ?? '').trim().toLowerCase().replace(/^(\d{1,2})월$/, '$1')
   if (!raw || ALL.has(raw)) return { all: true, to: today }
   if (TODAY.has(raw)) return { from: today, to: today }
   if (!/^\d{1,4}(-\d{1,2}){0,2}$/.test(raw)) return null
@@ -153,7 +166,11 @@ export function periodOf(text, today) {
           : oneDay(`${year}-${pad(parts[0])}-${pad(parts[1])}`)
         : parts[0].length === 4
           ? [`${parts[0]}-01-01`, `${parts[0]}-12-31`]
-          : oneDay(`${year}-${month}-${pad(parts[0])}`)
+          // A month of this year. Not a day: see the note above about what a
+          // recount is usually asked for. Thirteen and up is no month, and
+          // wholeMonth would build "2026-20-01", which isDay rejects below — so
+          // it comes back as a refusal rather than as some other month.
+          : wholeMonth(`${year}-${pad(parts[0])}`)
 
   if (!isDay(from) || !isDay(to)) return null
   // A day that has not happened cannot be recounted, and a month or year still
@@ -183,14 +200,14 @@ export function weekStart(key) {
 
 const empty = () => ({
   currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-  currencies: {}, kinds: {},
+  currencies: {}, kinds: {}, periods: {},
 })
 
 // The splits a day is dealt into besides its own total. Named in one place
 // because every fold, every merge and every read has to walk the same list —
 // a third one added to some of them and not the others is a figure that stops
 // adding up to the day it came from.
-const SPLITS = ['currencies', 'kinds']
+const SPLITS = ['currencies', 'kinds', 'periods']
 
 // A buyer whose currency Play did not report. Filed under a key rather than
 // dropped, so the split always accounts for every order in the day — and so a
@@ -212,6 +229,28 @@ export const KIND_RENEWAL = 'renewal'
 // An order this could not place — filed rather than dropped, for the same reason
 // the currency split files '?'.
 const UNKNOWN_KIND = '?'
+
+// How often the subscription behind a charge bills. Worked out in subs.js from
+// the run of charges sharing an order id, because a single order does not carry
+// it — see the note there.
+//
+// A one-off purchase is filed under its own key rather than left out. Every
+// split here adds back up to the day it came from, and that is worth more than
+// a tidier list: a "periods" split that quietly omitted every purchase would
+// look like a total and be one only for subscriptions.
+export const PERIOD_NONE = 'none'
+// The plans Play sells. Worked out in subs.js and named here, beside the other
+// two splits' keys — a bucket key defined in the module that writes it and again
+// in the module that reads it is two definitions of one string, and the day the
+// two disagree the split grows a second row meaning the same thing.
+export const PERIOD_WEEKLY = 'weekly'
+export const PERIOD_MONTHLY = 'monthly'
+export const PERIOD_QUARTERLY = 'quarterly'
+export const PERIOD_YEARLY = 'yearly'
+// A subscription whose period could not be worked out, for the same reason the
+// other two splits file '?': a total that omits what it could not classify reads
+// as a total.
+export const UNKNOWN_PERIOD = '?'
 
 // The same payout-currency figure that went into the day's own amount, only
 // filed under the currency the buyer paid in. Deliberately not a second
@@ -241,7 +280,7 @@ function attribute(split, key, { amount, refund, counted }) {
 // The day itself is still rebuilt rather than mutated: it is a handful of fields
 // and two small maps, and the copy is what keeps a bucket already handed out
 // from changing under whoever is holding it.
-export function recordInto(buckets, key, { net, refund, currency, from, kind }) {
+export function recordInto(buckets, key, { net, refund, currency, from, kind, period }) {
   // Merged onto a fresh shape rather than used as-is: a bucket written by an
   // older version is missing fields added since, and += on undefined is NaN.
   const prev = { ...empty(), ...buckets[key] }
@@ -264,6 +303,10 @@ export function recordInto(buckets, key, { net, refund, currency, from, kind }) 
   // numbers rather than a re-reading of the order, so each of them adds back up
   // to the day and to the other.
   next.kinds = attribute(prev.kinds, kind || UNKNOWN_KIND, share)
+  // And a third way: how often this money comes back. A renewal row answers
+  // "how many renewals", this one answers "how many of them are monthly", which
+  // is the question the month-ahead figure is built on.
+  next.periods = attribute(prev.periods, period ?? UNKNOWN_PERIOD, share)
   buckets[key] = next
   return buckets
 }

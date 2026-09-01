@@ -17,8 +17,9 @@
 // order being stored again.
 //
 // Chunked by month so a poll rewrites the current month rather than three years.
-import { dayKey, recordInto as tally, MAX_DAYS } from './totals.js'
+import { dayKey, recordInto as tally, MAX_DAYS, PERIOD_NONE } from './totals.js'
 import { estimatedNet, kindOf } from './format.js'
+import { periodLookup } from './subs.js'
 
 // pending is not an event; see background.js. It is not stored either, or a
 // pending order would sit in the tally as a sale that has not happened.
@@ -62,11 +63,20 @@ export function merge(kept, incoming) {
 // An order that cannot be converted into that currency is counted as uncounted
 // rather than added across currencies, exactly as before.
 // Writes into the map it is given and returns it. See foldDays below.
-export function countInto(buckets, o, zone, fx) {
+//
+// `periodOf` answers how often the subscription behind an order bills. It is
+// passed in rather than worked out here because it cannot be: the period is a
+// property of the whole run of charges sharing an order id, and this sees one
+// order. A caller with only the one order — the running footer under a batch of
+// announcements — passes nothing and the order lands under the unknown key,
+// which is honest: from one order the period is unknown.
+export function countInto(buckets, o, zone, fx, periodOf) {
   if (!TERMINAL.has(o.state)) return buckets
   const day = dayKey(o.at, zone)
   const paid = estimatedNet(o, fx)
-  const share = { net: paid, currency: fx.currency, from: o.net?.currency, kind: kindOf(o) }
+  const kind = kindOf(o)
+  const period = periodOf ? periodOf(o) ?? PERIOD_NONE : undefined
+  const share = { net: paid, currency: fx.currency, from: o.net?.currency, kind, period }
   if (o.state !== 'refunded') return tally(buckets, day, { ...share, refund: false })
   // Play returns a refunded order once, as the reversal alone. The charge it
   // reverses happened too, and on this same day — a reversal is filed under the
@@ -84,8 +94,13 @@ export function countInto(buckets, o, zone, fx) {
 // One accumulator for the whole fold, which is why countInto takes a map it may
 // write to rather than returning a copy: this is called once per order over the
 // entire history, and copying the map of days each time is quadratic.
-export const foldDays = (orders, zone, fx) =>
-  orders.reduce((buckets, o) => countInto(buckets, o, zone, fx), {})
+export const foldDays = (orders, zone, fx) => {
+  // Built once for the whole fold. periodLookup walks every order to group the
+  // subscription runs, so calling it per order would be quadratic — the same
+  // trap the day map fell into before recordInto took an accumulator.
+  const periodOf = periodLookup(orders)
+  return orders.reduce((buckets, o) => countInto(buckets, o, zone, fx, periodOf), {})
+}
 
 // A month key moved by whole months, so a range can be widened past the chunk
 // it starts in.

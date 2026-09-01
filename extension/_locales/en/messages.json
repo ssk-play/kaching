@@ -429,7 +429,10 @@
     "message": "Work a day out again from Play, by charge date"
   },
   "cmdRecountUsage": {
-    "message": "Send /recount on its own to fetch everything again, or name a period: today, 20 for the 20th of this month, 08-20 for this year, 2026-08-20 for that day, 2026-08 for a month, 2026 for a year. Nothing further back than $1 days."
+    "message": "Send /recount on its own to fetch everything again, or name a period: today, 6 for June of this year, 08-20 for the 20th of August this year, 2026-08-20 for that day, 2026-08 for a month, 2026 for a year. A lone number is a month, so a day needs its month with it. Nothing further back than $1 days."
+  },
+  "cmdRecountTooWide": {
+    "message": "\"$1\" is a wider span than a chat can wait for. Type /recount $1 yourself and it will run to the end."
   },
   "logAdjust": {
     "message": "$1 corrected by $2"

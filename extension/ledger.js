@@ -1,16 +1,24 @@
-// The one thing the model is allowed to touch: a read of the tally that is
-// already there. It computes nothing — every figure below comes out of the same
-// fold /today and the order footer are drawn from, so an answer given here and
-// one volunteered under an order cannot disagree.
+// What the model is allowed to touch. Nearly all of it is a read of the tally
+// that is already there, computing nothing — every figure below comes out of the
+// same fold /today and the order footer are drawn from, so an answer given here
+// and one volunteered under an order cannot disagree.
 //
-// Read-only on purpose. /recount and /adjust write, and a wrong write is a
-// wrong ledger; a wrong read is only a wrong sentence, which the figures quoted
-// beside it give the reader a way to catch.
+// The exception is read_expected, which is the only thing here that answers
+// about a day that has not happened, and run_recount, which is the only thing
+// here that writes. Both are argued for where they are defined. The rule that
+// held for a long time — a wrong read is only a wrong sentence, a wrong write is
+// a wrong ledger — is why /adjust is still not among them.
+//
+// Every figure is worked out in JS, never left to the model. It once added eight
+// weeks of days itself and got three of them wrong, 5% over the range, which is
+// how the grouping in read_totals came to be here rather than in the prompt.
 import {
   startedAt, shift, sumRange, combine, weekStart, isDay, UNKNOWN_CURRENCY,
   KIND_BUY, KIND_SUB, KIND_RENEWAL,
+  PERIOD_MONTHLY, PERIOD_NONE, UNKNOWN_PERIOD,
 } from './totals.js'
 import { foldDays, readAll } from './orders.js'
+import { expected as expectedFrom, PERIODS } from './subs.js'
 import { load, zoneOf } from './settings.js'
 
 // What a range costs is the rows it emits, not the days it names — so that is
@@ -236,11 +244,17 @@ export const byCurrency = (totals, adjustments, range, today) =>
     totals, adjustments, range, today,
   )
 
-export const byKind = (totals, adjustments, range, today) =>
-  splitBy(
-    { field: 'kinds', rows: 'kinds', row: 'kind' },
-    totals, adjustments, range, today,
-  )
+// Two lists from one read, because the two questions are always asked together:
+// "how many renewals" is nearly always followed by "how many of those are
+// monthly", and a second round trip to find out costs a turn the question has
+// only four of. Both are the same money dealt differently, so they add up to
+// each other and to the day.
+export function byKind(totals, adjustments, range, today) {
+  const out = splitBy({ field: 'kinds', rows: 'kinds', row: 'kind' }, totals, adjustments, range, today)
+  if (out.error || !out.kinds) return out
+  const periods = splitBy({ field: 'periods', rows: 'periods', row: 'period' }, totals, adjustments, range, today)
+  return { ...out, periods: periods.periods ?? [] }
+}
 
 const READ_TOTALS = {
   name: 'read_totals',
@@ -306,6 +320,78 @@ const READ_BY_CURRENCY = {
   },
 }
 
+// The one tool here that changes anything. It was read-only on purpose for a
+// long time — a wrong read is a wrong sentence, a wrong write is a wrong ledger
+// — and what changed is what a recount does. Since the orders themselves became
+// the tally it merges by order id and never removes, so the worst a recount of
+// the wrong month can do is fetch a span nobody asked about and put the same
+// records back. /adjust is still not here: that one writes a figure of its own
+// invention, and there is nothing to merge it against.
+//
+// Bounded to a day or a month, not because a year would break anything but
+// because the model is holding a chat open while this runs. A year of Play
+// requests outlives the question that asked for it.
+const RUN_RECOUNT = {
+  name: 'run_recount',
+  description:
+    'Fetch a span of orders from Play again and fold the tally back out of them, for when a ' +
+    'figure looks wrong or a stretch was missed while the browser was closed. This CHANGES ' +
+    'what every other tool reads, so call it only when asked to, never to check something. ' +
+    'It merges by order id and removes nothing, so running it twice is the same as running ' +
+    'it once. "period" is a month as YYYY-MM, a single day as YYYY-MM-DD, or a bare month ' +
+    'number for this year. A year or the whole history is too long to run inside a chat: ' +
+    'for those, say that the developer should type "/recount 2026" or "/recount" themselves. ' +
+    'It answers with what it found, which you should pass on as it is.',
+  parameters: {
+    type: 'object',
+    properties: {
+      period: {
+        type: 'string',
+        description: 'YYYY-MM, YYYY-MM-DD, or a bare month number for this year.',
+      },
+    },
+    required: ['period'],
+    additionalProperties: false,
+  },
+}
+
+const READ_EXPECTED = {
+  name: 'read_expected',
+  description:
+    'What the subscriptions already recorded here are DUE to bill in a range, one row per ' +
+    'billing period. This is the only tool that answers about days that have not happened; ' +
+    'every other one reads what did. Use it for "what should next month bring", and set ' +
+    '"period" to "' +
+    PERIOD_MONTHLY +
+    '" for a question about monthly renewals specifically. ' +
+    'How it is worked out: each subscription\'s last charge plus its own billing period, ' +
+    'at the amount that last charge was worth. Fields per row: "period" is ' +
+    PERIODS.join(', ') + '; ' +
+    '"subscriptions" is how many are due in the range; "amount" is what they would be worth ' +
+    'in "payoutCurrency"; "uncounted" is any whose amount could not be converted, so the ' +
+    'row is short by them. ' +
+    'It CANNOT see cancellations, price changes or failed payments, so it is a ceiling and ' +
+    'not a forecast — the "assumes" field says so and you must pass that on in your answer, ' +
+    'in the same breath as the figure rather than as a footnote. ' +
+    '"subscriptionsWithUnknownPeriod" is subscriptions whose period could not be worked out ' +
+    'because only one charge of them is on record; they are in no row, so the figure is ' +
+    'short by whatever they would have billed. Say so when it appears.',
+  parameters: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'First day of the range, YYYY-MM-DD' },
+      to: { type: 'string', description: 'Last day of the range, YYYY-MM-DD' },
+      period: {
+        type: 'string',
+        enum: [...PERIODS],
+        description: 'Only subscriptions billing on this period. Omit for all of them.',
+      },
+    },
+    required: ['from', 'to'],
+    additionalProperties: false,
+  },
+}
+
 // Read fresh on every call rather than handed in once. A question may take
 // several turns, and a poll landing an order in the middle of one should be
 // answered from what is in storage now, not from a copy taken before it arrived.
@@ -315,7 +401,9 @@ const READ_BY_KIND = {
     "This bot's own tally split by what kind of sale each order was, one row per kind, " +
     'biggest first. Use this — not read_totals — for any question about subscriptions, ' +
     'renewals or one-off purchases, including how many there were. ' +
-    'Both "from" and "to" are optional and default to the whole recorded ' +
+    'Both "from" and "to" are optional and default to the whole recorded history — omit BOTH ' +
+    'for a question that names no period ("how many yearly subscriptions are there"), because ' +
+    'a range guessed to be recent answers zero for anything older than the guess. Default ' +
     'history. The "kind" of a row is "' +
     KIND_RENEWAL +
     '" for a subscription charge after the first one, "' +
@@ -330,7 +418,14 @@ const READ_BY_KIND = {
     'charges — for renewals that IS the number of renewals; "refunds" counts reversals ' +
     'and is not in "orders"; "refunded" is what they were worth, negative; "uncounted" is ' +
     'orders that could not be converted, so that row is short by them. "corrections" is ' +
-    '/adjust entries, which belong to no kind and are in no row.',
+    '/adjust entries, which belong to no kind and are in no row. ' +
+    'The same money is also dealt a second way in "periods", one row per billing period — ' +
+    PERIODS.join(', ') + ', "' + PERIOD_NONE + '" for ' +
+    'one-off purchases, and "' + UNKNOWN_PERIOD + '" for a subscription whose period could ' +
+    'not be worked out ' +
+    'because only one charge of it is on record. Same fields per row as above. Use it for ' +
+    '"how much of this is monthly subscriptions"; for what is DUE rather than what happened, ' +
+    'use read_expected.',
   parameters: {
     type: 'object',
     properties: {
@@ -357,13 +452,19 @@ const stored = async () => {
     adjustments: {}, rates: {}, payoutCurrency: null,
   })
   const zone = zoneOf(settings)
-  return {
-    totals: foldDays(await readAll(zone), zone, { currency: payoutCurrency, rates }),
-    adjustments,
-  }
+  const orders = await readAll(zone)
+  const fx = { currency: payoutCurrency, rates }
+  // The orders themselves come back too. The day buckets cannot answer what is
+  // due next: a projection needs the run of charges a subscription made, and
+  // folding them into days is exactly the step that throws that away.
+  return { totals: foldDays(orders, zone, fx), adjustments, orders, zone, fx }
 }
 
-export const tools = (today) => [
+// `recount` is handed in by background.js rather than imported. It is the one
+// thing here that writes, and it lives beside the poll it shares a mutex with —
+// importing it the other way round would be a cycle, and moving it here would
+// put the write path in the file whose whole point is that it only reads.
+export const tools = (today, { recount } = {}) => [
   {
     spec: READ_TOTALS,
     run: async (input) => {
@@ -385,4 +486,27 @@ export const tools = (today) => [
       return byKind(totals, adjustments, input ?? {}, today)
     },
   },
+  {
+    spec: READ_EXPECTED,
+    run: async (input) => {
+      const { from, to, period } = input ?? {}
+      if (!isDay(from) || !isDay(to)) {
+        return { error: 'from and to must be real dates in YYYY-MM-DD form' }
+      }
+      if (from > to) return { error: 'from must be on or before to' }
+      // Refused rather than filtered on. An off-list value — "Monthly", "month"
+      // — matches no plan, so the projection would come back empty and read as
+      // "nothing is due", which is a wrong answer where an error is the right
+      // one. The sibling reads validate their inputs the same way.
+      if (period && !PERIODS.includes(period)) {
+        return { error: `period must be one of ${PERIODS.join(', ')}` }
+      }
+      const { orders, zone, fx } = await stored()
+      return expectedFrom(orders, { from, to, period }, zone, fx, today)
+    },
+  },
+  // Offered only when a caller handed one in. The options-page test button asks
+  // its question with no recount to give, and a tool the model can call and this
+  // cannot run is worse than one it never sees.
+  ...(recount ? [{ spec: RUN_RECOUNT, run: (input) => recount(input?.period ?? '') }] : []),
 ]
