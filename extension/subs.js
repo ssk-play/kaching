@@ -104,16 +104,92 @@ export function subscriptions(orders) {
     runs.get(id).push(o)
   }
 
-  const out = new Map()
+  const measured = new Map()
   for (const [id, run] of runs) {
     run.sort((a, b) => a.at - b.at)
     // The most recent gap, not an average of them all. A subscription that moved
     // from monthly to yearly has both in its history, and only the last one says
     // what it will do next — which is the only thing anyone asks a period for.
-    const period = run.length < 2
+    measured.set(id, run.length < 2
       ? UNKNOWN_PERIOD
-      : periodForGap(gapDays(run[run.length - 2], run[run.length - 1]))
-    out.set(id, { id, period, charges: run.length, last: run[run.length - 1] })
+      : periodForGap(gapDays(run[run.length - 2], run[run.length - 1])))
+  }
+
+  const byProduct = plansByProduct(runs, measured)
+  const out = new Map()
+  for (const [id, run] of runs) {
+    const own = measured.get(id)
+    // A plan belongs to the product, not to the buyer. Measured from this
+    // subscription's own charges where there are two of them; otherwise taken
+    // from what the same product's other subscribers are billed, which is the
+    // same plan by definition.
+    //
+    // This is most of the answer, not a refinement of it. On a real account:
+    // 150 subscriptions, 50 of them with a second charge to measure. Reading
+    // each run alone left two thirds of the money as "period unknown" and a
+    // month-ahead figure of 48,814 — with the product's own plan applied it is
+    // 123,311, and the eight still unplaced are a yearly product that has not
+    // had a year yet, which is honestly unknown.
+    const product = productOf(run[0])
+    const period = own === UNKNOWN_PERIOD
+      ? (product && byProduct.get(product)) ?? own
+      : own
+    out.set(id, {
+      id,
+      period,
+      // Whether this subscription's own charges said so, or its product's did.
+      // The caveats downstream read differently for the two: a run that was
+      // measured is a fact, and one that inherited is a plan the buyer is on.
+      measured: own !== UNKNOWN_PERIOD,
+      charges: run.length,
+      last: run[run.length - 1],
+    })
+  }
+  return out
+}
+
+// A subscription's product. Package and sku together, because two apps may sell
+// a sku of the same name and they are not the same plan.
+function productOf(order) {
+  const pkg = order.packageName ?? ''
+  const sku = order.sku ?? ''
+  // Both halves or nothing. Play returns an empty string for either when it does
+  // not report them, and a key of "|" would put every such subscription in one
+  // bucket — handing a plan measured in one app to a subscriber of another.
+  return pkg && sku ? `${pkg}|${sku}` : null
+}
+
+// What each product bills on, decided by its own subscriptions that could be
+// measured. A product sells one plan per sku, so they should agree; where they
+// do not — a plan whose period Play changed, a sku reused — the majority stands
+// only if it is a large one, and otherwise the product is left unplaced rather
+// than settled by a coin toss.
+const AGREEMENT = 0.8
+// And at least this many runs to agree. One is not a majority, it is an
+// anecdote: a single failed payment that Play retried a week later reads as a
+// weekly gap, and on a young sku that one run would be the only measured one —
+// handing "weekly" to every subscriber of a monthly product and quadrupling the
+// month ahead. Two observations is a thin guard and a real one.
+const MIN_MEASURED = 2
+
+function plansByProduct(runs, measured) {
+  const votes = new Map()
+  for (const [id, run] of runs) {
+    const period = measured.get(id)
+    if (period === UNKNOWN_PERIOD) continue
+    const key = productOf(run[0])
+    if (!key) continue
+    const tally = votes.get(key) ?? new Map()
+    tally.set(period, (tally.get(period) ?? 0) + 1)
+    votes.set(key, tally)
+  }
+
+  const out = new Map()
+  for (const [key, tally] of votes) {
+    const counted = [...tally.values()].reduce((n, c) => n + c, 0)
+    if (counted < MIN_MEASURED) continue
+    const [period, top] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (top / counted >= AGREEMENT) out.set(key, period)
   }
   return out
 }
@@ -140,24 +216,85 @@ export function periodLookup(orders) {
 // looks exactly like one that will renew again, right up until the day it does
 // not. So this is a ceiling, never a forecast, and `assumes` carries that into
 // the answer so the model has to pass it on.
+// New sales cannot be projected the way renewals can. A renewal is a charge
+// already scheduled by a subscription that exists; a purchase next Tuesday is a
+// stranger who has not arrived. There is no due date to read, so the only honest
+// estimate is what the account has been taking lately, carried forward.
+//
+// A rate, not a trend. One-off purchases on the account this was built for went
+// 548,126 in July and 1,056,819 in August — nearly double — and two points do
+// not make a curve. Compounding that guess would put a number in front of the
+// reader that the data cannot support; the recent daily rate is a figure they
+// can check against the days it was measured over, which is why the window
+// comes back with it.
+export const RATE_WINDOW_DAYS = 28
+
+export function recentRate(orders, zone, fx, today) {
+  const wanted = shift(today, -RATE_WINDOW_DAYS)
+  // Up to yesterday: today is part-done, and a half day drags the average down
+  // by however much of it has not happened.
+  const closes = shift(today, -1)
+  // The window the store can actually answer for. A install three days old holds
+  // three days of orders, and dividing those by twenty-eight reports a ninth of
+  // the true rate — under a `measuredOver` line claiming four weeks of
+  // observation that never happened.
+  let earliest = null
+  for (const o of orders) {
+    const day = dayKey(o.at, zone)
+    if (!earliest || day < earliest) earliest = day
+  }
+  const opens = earliest && earliest > wanted ? earliest : wanted
+  const days = Math.max(1, Math.round(
+    (Date.parse(`${closes}T00:00:00Z`) - Date.parse(`${opens}T00:00:00Z`)) / DAY_MS,
+  ) + 1)
+  let amount = 0
+  let counted = 0
+  for (const o of orders) {
+    // Renewals are left out on purpose — they are projected from their own due
+    // dates, and counting them here as well would bill every subscription twice.
+    if (cycleOf(o) > 1) continue
+    if (o.state !== 'charged' && o.state !== 'refunded') continue
+    const day = dayKey(o.at, zone)
+    if (day < opens || day > closes) continue
+    const paid = estimatedNet(o, fx)
+    if (!paid || paid.currency !== fx?.currency) continue
+    amount += o.state === 'refunded' ? -Math.abs(paid.amount) : paid.amount
+    counted += 1
+  }
+  return { from: opens, to: closes, days, orders: counted, amount, perDay: amount / days }
+}
+
 export function expected(orders, { from, to, period } = {}, zone, fx, today) {
   const subs = subscriptions(orders)
   const rows = new Map()
   const currency = fx?.currency ?? null
   let unknown = 0
   let refunded = 0
+  let lapsed = 0
+  let inferred = 0
   let truncated = false
 
-  for (const { period: plan, last } of subs.values()) {
+  for (const sub of subs.values()) {
+    const { period: plan, last } = sub
     const lastDay = dayKey(last.at, zone)
     // Two different questions, and one measure cannot answer both.
     //
     // Is it still alive? Judged against today, never against the range. A
-    // subscription that last billed longer ago than the longest plan Play sells
-    // did not renew, it stopped — and that is true whichever months are being
-    // asked about. Measured against the range instead, a question reaching far
-    // enough ahead called every live subscription stale and answered nothing.
-    if (daysApartKeys(lastDay, today) > LONGEST_PERIOD_DAYS) continue
+    // subscription that has missed its own next charge by a wide margin did not
+    // renew, it stopped — and that is true whichever months are being asked
+    // about. Measured against the range instead, a question reaching far enough
+    // ahead called every live subscription stale and answered nothing.
+    //
+    // Against its OWN period, not against the longest plan Play sells. That flat
+    // ceiling was tolerable while a subscription seen once was unknown and
+    // therefore skipped; now that it inherits its product's plan, a monthly
+    // subscriber last charged ten months ago would inherit "monthly", pass a
+    // 380-day guard and be projected as revenue still to come.
+    const idle = daysApartKeys(lastDay, today)
+    if (idle > lapsedAfter(plan)) {
+      lapsed += 1
+      continue
+    }
     // Did it exist yet? Judged against the range. A subscription first charged
     // in August is not missing from a question about January.
     if (lastDay > to) continue
@@ -180,6 +317,7 @@ export function expected(orders, { from, to, period } = {}, zone, fx, today) {
     }
     if (period && plan !== period) continue
 
+    if (!sub.measured) inferred += 1
     const { days, hitGuard } = dueBetween(dayKey(last.at, zone), plan, from, to, today)
     truncated ||= hitGuard
     // Nothing due in the range. Counted nowhere: a subscription billing next
@@ -211,6 +349,15 @@ export function expected(orders, { from, to, period } = {}, zone, fx, today) {
     assumes: 'nobody cancels and no price changes; this is a ceiling, not a forecast',
     ...(unknown ? { subscriptionsWithUnknownPeriod: unknown } : {}),
     ...(refunded ? { subscriptionsSkippedAfterRefund: refunded } : {}),
+    // Left out because they are past due by half a period again — Play would
+    // have charged them by now. Named rather than dropped in silence: on a
+    // shrinking account this is where the shrinking shows.
+    ...(lapsed ? { subscriptionsLapsed: lapsed } : {}),
+    // Counted with a plan taken from their product rather than measured from
+    // their own charges, because they have only been charged once. The figure
+    // leans on them — on a young account most of it does — and a reader who
+    // thinks every period was observed is reading it as firmer than it is.
+    ...(inferred ? { subscriptionsWithInferredPeriod: inferred } : {}),
     // A range so wide the walk stopped short of it. Said rather than left to
     // look like a complete answer — the whole point of the other two fields.
     ...(truncated ? { truncated: true } : {}),
@@ -245,6 +392,19 @@ const MAX_STEPS = 1000
 const daysApartKeys = (earlier, later) =>
   Math.round((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / DAY_MS)
 
-// The longest plan in BANDS, with its own slack. Past this and a subscription
-// that never billed a second time is not going to.
+// The longest plan in BANDS, with its own slack. Used only where no plan is
+// known, which is the one case there is nothing better to measure against.
 const LONGEST_PERIOD_DAYS = 380
+
+// Roughly how long each plan runs, for judging whether one has lapsed.
+const SPAN_DAYS = {
+  [PERIOD_WEEKLY]: 7,
+  [PERIOD_MONTHLY]: 31,
+  [PERIOD_QUARTERLY]: 92,
+  [PERIOD_YEARLY]: 366,
+}
+
+// Half a period past its due date and Play would have charged it, retried it, or
+// given up. The slack is generous on purpose: a charge Play has not reported
+// yet must not be read as a cancellation.
+const lapsedAfter = (plan) => (SPAN_DAYS[plan] ?? LONGEST_PERIOD_DAYS) * 1.5

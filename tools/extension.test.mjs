@@ -2066,10 +2066,16 @@ test('a month in progress separates all revenue from subscription revenue', () =
       assert.equal(out.chargedSoFar, 150000)
       assert.equal(out.chargedSoFarFromSubscriptions, 0)
       assert.equal(out.stillDue, 7000)
-      // The month, and the month's subscriptions. 157,000 is a true answer to
-      // one question and a twenty-fold overstatement of the other.
-      assert.equal(out.total, 157000)
       assert.equal(out.totalFromSubscriptions, 7000)
+      // The rest of the month at the rate the account has been trading. The
+      // purchase is the only thing in the window, so 150,000 over 28 days is
+      // 5,357 a day, and there are 20 days of September left after the 10th.
+      assert.equal(out.newSalesAtRecentRate.perDay, 5357)
+      assert.equal(out.newSalesAtRecentRate.daysRemaining, 20)
+      assert.equal(out.newSalesAtRecentRate.amount, 107143)
+      assert.equal(out.newSalesAtRecentRate.measuredOver.orders, 1)
+      // All three parts: what happened, what is scheduled, what the rate says.
+      assert.equal(out.total, 150000 + 7000 + 107143)
     })
 })
 
@@ -2097,19 +2103,108 @@ test('subscription money with no period is named, not quietly left out', () => {
   // figure with an unmeasured pile beside it and no sign the pile is there.
   const zone = 'UTC'
   const fx = { currency: 'KRW', rates: {} }
-  const charge = (id, day, amount) => ({
+  const charge = (id, day, amount, sku) => ({
     id, at: Date.parse(`${day}T04:00:00Z`), state: 'charged', subscription: true,
+    packageName: 'com.example.app', sku,
     total: { currency: 'KRW', amount }, net: { currency: 'KRW', amount },
   })
   const orders = [
-    charge('GPA.M', '2026-07-05', 6000), charge('GPA.M..0', '2026-08-05', 6000),
-    // One charge only, so no gap to measure.
-    charge('GPA.U', '2026-08-25', 90000),
+    charge('GPA.M', '2026-07-05', 6000, 'small'), charge('GPA.M..0', '2026-08-05', 6000, 'small'),
+    // One charge only, and the only subscriber to its product — so there is no
+    // sibling to take a plan from and it stays honestly unknown.
+    charge('GPA.U', '2026-08-25', 90000, 'enterprise'),
   ]
   const totals = O.foldDays(orders, zone, fx)
   const out = byKind(totals, {}, { from: '2026-08-01', to: '2026-08-31', period: 'monthly' }, '2026-09-02')
   assert.equal(out.matched.amount, 6000)
   assert.deepEqual(out.matched.subscriptionsWithUnknownPeriod, { amount: 90000, orders: 1 })
+})
+
+// A subscription of one product, charged on the days given.
+const subOn = (id, sku, days, amount = 5000) => days.map((day, i) => ({
+  id: i === 0 ? id : `${id}..${i - 1}`,
+  at: Date.parse(`${day}T04:00:00Z`), state: 'charged', subscription: true,
+  packageName: 'com.example.app', sku,
+  total: { currency: 'KRW', amount }, net: { currency: 'KRW', amount },
+}))
+
+test('a plan is taken from the product, and only on more than one witness', () => {
+  // The whole reason this exists. On the account it was built against, 100 of
+  // 150 subscriptions had a single charge and no gap to measure, so two thirds
+  // of the money was "period unknown" and the month ahead came back at 48,814
+  // where it should have been 123,311. A plan belongs to the product, not to
+  // the buyer.
+  const zone = 'UTC'
+  const measuredTwice = [
+    ...subOn('GPA.A', 'premium', ['2026-07-05', '2026-08-05']),
+    ...subOn('GPA.B', 'premium', ['2026-07-09', '2026-08-09']),
+    // Never renewed, so nothing of its own to measure.
+    ...subOn('GPA.C', 'premium', ['2026-08-14']),
+  ]
+  const found = S.subscriptions(measuredTwice)
+  assert.equal(found.get('GPA.C').period, T.PERIOD_MONTHLY)
+  assert.equal(found.get('GPA.C').measured, false)
+  assert.equal(found.get('GPA.A').measured, true)
+
+  // One witness is an anecdote, not a plan. A single failed payment that Play
+  // retried a week later reads as a weekly gap, and on a young product that one
+  // run would be the only measured one — handing "weekly" to every subscriber
+  // of a monthly product and quadrupling the month ahead.
+  const once = [
+    ...subOn('GPA.R', 'solo', ['2026-08-01', '2026-08-08']),
+    ...subOn('GPA.S', 'solo', ['2026-08-20']),
+  ]
+  assert.equal(S.subscriptions(once).get('GPA.S').period, T.UNKNOWN_PERIOD)
+
+  // A measured run is never overruled by its product.
+  const yearlyOne = [
+    ...subOn('GPA.Y', 'mixed', ['2025-03-01', '2026-03-01']),
+    ...subOn('GPA.M1', 'mixed', ['2026-07-01', '2026-08-01']),
+    ...subOn('GPA.M2', 'mixed', ['2026-07-02', '2026-08-02']),
+  ]
+  assert.equal(S.subscriptions(yearlyOne).get('GPA.Y').period, T.PERIOD_YEARLY)
+  void zone
+})
+
+test('an inherited plan does not resurrect a subscription that stopped', () => {
+  // The flat 380-day guard was safe only while a single-charge subscription was
+  // unknown and therefore skipped. Now that it inherits its product's plan, a
+  // monthly subscriber last charged ten months ago would inherit "monthly", pass
+  // a guard meant for yearly plans, and be reported as revenue still to come.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = [
+    ...subOn('GPA.A', 'premium', ['2026-07-05', '2026-08-05']),
+    ...subOn('GPA.B', 'premium', ['2026-07-09', '2026-08-09']),
+    // Charged once, ten months ago. Play would have billed it nine times since.
+    ...subOn('GPA.DEAD', 'premium', ['2025-11-10'], 100000),
+  ]
+  const out = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  assert.equal(out.subscriptionsLapsed, 1)
+  assert.equal(out.periods[0].amount, 10000)
+  // And the two live ones leant on nothing inferred, so nothing claims they did.
+  assert.equal(out.subscriptionsWithInferredPeriod, undefined)
+})
+
+test('the recent rate is divided by the days the store actually holds', () => {
+  // A three-day-old install holds three days of orders. Divided by the full
+  // window it reports a ninth of the true rate, under a line claiming four weeks
+  // of observation that never happened.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const buy = (day) => ({
+    id: `B${day}`, at: Date.parse(`${day}T04:00:00Z`), state: 'charged',
+    total: { currency: 'KRW', amount: 10000 }, net: { currency: 'KRW', amount: 10000 },
+  })
+  const young = [buy('2026-08-30'), buy('2026-08-31'), buy('2026-09-01')]
+  const rate = S.recentRate(young, zone, fx, '2026-09-02')
+  assert.equal(rate.from, '2026-08-30')
+  assert.equal(rate.days, 3)
+  assert.equal(rate.perDay, 10000)
+  // A store that covers the whole window uses the whole window.
+  const long = []
+  for (let d = 1; d <= 31; d += 1) long.push(buy(`2026-08-${String(d).padStart(2, '0')}`))
+  assert.equal(S.recentRate(long, zone, fx, '2026-09-02').days, S.RATE_WINDOW_DAYS)
 })
 
 test('the writing tool is offered only when there is something to run it', () => {
