@@ -186,7 +186,9 @@ forever.
 
 A notifier that dies quietly is indistinguishable from a quiet sales day, so
 this one reports its own failures: three consecutive failures trigger a Telegram
-message, and recovery is announced too. Delivery failures count the same as read
+message. Recovery is not announced unless you ask for it — it is the one message
+here that reports nothing happening, and by the time it lands you have usually
+seen the orders start arriving again. Delivery failures count the same as read
 failures — a revoked bot token leaves the read path healthy, so ignoring it would
 mean no signal at all.
 

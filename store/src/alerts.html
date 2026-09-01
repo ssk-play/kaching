@@ -5,8 +5,8 @@
      <ul class="points">
        <li>Warns when your Console session expires</li>
        <li>Counts delivery failures too, so a revoked bot token cannot hide</li>
-       <li>Tells you again when it recovers</li>
        <li>Toolbar badge shows the state at a glance</li>
+       <li>Optionally says when it starts working again</li>
      </ul>
    </div>
    <div>
@@ -14,7 +14,9 @@
 Your Play Console session expired.
 Sign in again in this browser.
 (3 checks in a row)</div>
-     <div class="msg">Kaching recovered.</div>
+     <div class="msg"><b>Kaching is not working.</b>
+Could not deliver to Telegram: 401 Unauthorized
+(3 checks in a row)</div>
      <p class="caption">Sent after three consecutive failures, then rate-limited.</p>
    </div>
  </div><div class="foot"><span>Chrome extension</span><span class="dot">·</span><span>English &amp; 한국어</span><span class="dot">·</span><span>Nothing leaves your browser except the message you asked for</span></div>

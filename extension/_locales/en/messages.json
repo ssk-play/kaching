@@ -119,6 +119,12 @@
   "lblVerbose": {
     "message": "Send every check result to Telegram"
   },
+  "lblSayRecovered": {
+    "message": "Say when it starts working again"
+  },
+  "hintSayRecovered": {
+    "message": "Off by default. The outage notice is always sent — this is the follow-up saying the outage is over, which you will usually have worked out from the orders arriving again."
+  },
   "hintVerbose": {
     "message": "For confirming it is alive. Turn it off once you trust it."
   },

@@ -1148,6 +1148,7 @@ async function onSuccess(s, all) {
 // messages all landed. Said on any run Play answered, held delivery included —
 // the outage it closes was announced regardless of the pace.
 async function announceRecovery(s, st) {
+  if (!s.sayRecovered) return
   if (st.fails < FAILS_BEFORE_ALERT) return
   await sendTelegram(s.botToken, s.chatId, label(s, t('tgRecovered'))).catch(() => {})
   await record('info', 'logRecovered')
