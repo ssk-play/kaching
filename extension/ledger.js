@@ -17,6 +17,11 @@ import {
   KIND_BUY, KIND_SUB, KIND_RENEWAL,
   PERIOD_MONTHLY, PERIOD_NONE, UNKNOWN_PERIOD,
 } from './totals.js'
+
+// The kinds a question may name, in one list for the same reason PERIODS is one:
+// the schema the model reads and the check that validates its answer have to
+// offer exactly the same words.
+const KINDS = [KIND_BUY, KIND_SUB, KIND_RENEWAL]
 import { foldDays, readAll } from './orders.js'
 import { expected as expectedFrom, PERIODS } from './subs.js'
 import { load, zoneOf } from './settings.js'
@@ -250,10 +255,69 @@ export const byCurrency = (totals, adjustments, range, today) =>
 // only four of. Both are the same money dealt differently, so they add up to
 // each other and to the day.
 export function byKind(totals, adjustments, range, today) {
+  const { period, kind } = range ?? {}
+  if (period && !PERIODS.includes(period) && period !== PERIOD_NONE) {
+    return { error: `period must be one of ${[...PERIODS, PERIOD_NONE].join(', ')}` }
+  }
+  if (kind && !KINDS.includes(kind)) {
+    return { error: `kind must be one of ${KINDS.join(', ')}` }
+  }
   const out = splitBy({ field: 'kinds', rows: 'kinds', row: 'kind' }, totals, adjustments, range, today)
   if (out.error || !out.kinds) return out
   const periods = splitBy({ field: 'periods', rows: 'periods', row: 'period' }, totals, adjustments, range, today)
-  return { ...out, periods: periods.periods ?? [] }
+  const plans = splitBy({ field: 'plans', rows: 'plans', row: 'plan' }, totals, adjustments, range, today)
+  return {
+    ...out,
+    periods: periods.periods ?? [],
+    // The two crossed, with the key taken apart again so a row reads as the two
+    // facts it is rather than as a string the model has to parse.
+    plans: (plans.plans ?? []).map(({ plan, ...row }) => {
+      const [rowPeriod, rowKind] = String(plan).split(':')
+      return { period: rowPeriod, kind: rowKind, ...row }
+    }),
+    // Asked for one corner of the cross, the answer is that corner — added up
+    // here rather than picked out of five rows by the reader. Given the rows
+    // alone a model answered "August monthly subscriptions" with the total for
+    // every subscription, because both numbers were in front of it and only one
+    // of them was the one asked for.
+    ...(period || kind
+      ? { matched: matching(plans.plans ?? [], period, kind) }
+      : {}),
+  }
+}
+
+// The rows of the cross that satisfy whichever halves were named, summed. The
+// figure is the point: one number to quote, with the two facts that define it.
+function matching(rows, wantPeriod, wantKind) {
+  const out = { amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0 }
+  if (wantPeriod) out.period = wantPeriod
+  if (wantKind) out.kind = wantKind
+  // Subscriptions whose period could not be worked out, because only one charge
+  // of them is on record. Asked for the monthly ones, they are neither in nor
+  // out — they might be monthly and nothing here can say. Named for the same
+  // reason the projection names its own unknowns: told to quote `matched`, a
+  // model would otherwise report a figure with an unmeasured pile beside it and
+  // no sign that the pile exists.
+  let unplaced = 0
+  let unplacedOrders = 0
+  for (const row of rows) {
+    const [rowPeriod, rowKind] = String(row.plan).split(':')
+    const kindFits = !wantKind || rowKind === wantKind
+    if (wantPeriod && rowPeriod === UNKNOWN_PERIOD && kindFits
+      && (rowKind === KIND_SUB || rowKind === KIND_RENEWAL)) {
+      unplaced += row.amount ?? 0
+      unplacedOrders += row.orders ?? 0
+    }
+    if (wantPeriod && rowPeriod !== wantPeriod) continue
+    if (!kindFits) continue
+    for (const field of ['amount', 'orders', 'refunds', 'refunded', 'uncounted']) {
+      out[field] += row[field] ?? 0
+    }
+  }
+  if (unplaced || unplacedOrders) {
+    out.subscriptionsWithUnknownPeriod = { amount: unplaced, orders: unplacedOrders }
+  }
+  return out
 }
 
 const READ_TOTALS = {
@@ -331,6 +395,35 @@ const READ_BY_CURRENCY = {
 // Bounded to a day or a month, not because a year would break anything but
 // because the model is holding a chat open while this runs. A year of Play
 // requests outlives the question that asked for it.
+// What the range has already earned, scoped to the plan being asked about. Read
+// off the crossed split rather than the day totals so that "monthly" means the
+// monthly rows and not the whole day.
+//
+// With no period named it is every kind of sale, one-off purchases included —
+// which is right for "what will September bring" and wrong for anything that
+// says "subscriptions", so the two are handed back separately and the
+// description says which is which. Nothing here decides for the reader.
+//
+// Corrections are added because /adjust belongs to no plan and so appears in
+// none of the rows. Left out, this figure disagrees with read_totals over the
+// very same days, and the model has two answers for one question.
+function chargedIn(split, period) {
+  const out = { amount: 0, uncounted: 0, subscriptions: 0 }
+  if (!split || split.error || !split.plans) return out
+  for (const row of split.plans) {
+    const [rowPeriod, rowKind] = String(row.plan).split(':')
+    if (period && rowPeriod !== period) continue
+    out.amount += row.amount ?? 0
+    out.uncounted += row.uncounted ?? 0
+    if (rowKind === KIND_SUB || rowKind === KIND_RENEWAL) out.subscriptions += row.amount ?? 0
+  }
+  const corrections = split.corrections ?? 0
+  // A correction belongs to no plan, so it lands in the total but not in the
+  // subscription half — the same rule the splits themselves follow.
+  if (!period) out.amount += corrections
+  return out
+}
+
 const RUN_RECOUNT = {
   name: 'run_recount',
   description:
@@ -370,7 +463,18 @@ const READ_EXPECTED = {
     '"subscriptions" is how many are due in the range; "amount" is what they would be worth ' +
     'in "payoutCurrency"; "uncounted" is any whose amount could not be converted, so the ' +
     'row is short by them. ' +
-    'It CANNOT see cancellations, price changes or failed payments, so it is a ceiling and ' +
+    'A month already under way is part fact and part projection, so both halves come back ' +
+    'and you must pick the pair that matches the question. "chargedSoFar" is EVERYTHING the ' +
+    'range has earned already — one-off purchases included — and "total" is that plus the ' +
+    'projection: quote those two for a plain "what will this month bring". ' +
+    '"chargedSoFarFromSubscriptions" and "totalFromSubscriptions" are the same two counting ' +
+    'subscription charges only: quote THOSE whenever the question says subscriptions or ' +
+    'renewals, or you will report every purchase of the month as subscription revenue. ' +
+    '"stillDue" alone is only the days that have not happened, which is nobody\'s question ' +
+    'about a month in progress. "chargedSoFarUncounted", when present, is orders that could ' +
+    'not be converted, so say the figure is short by them. ' +
+    'It CANNOT see cancellations, price changes or failed payments, so the projected half ' +
+    'is a ceiling and ' +
     'not a forecast — the "assumes" field says so and you must pass that on in your answer, ' +
     'in the same breath as the figure rather than as a footnote. ' +
     '"subscriptionsWithUnknownPeriod" is subscriptions whose period could not be worked out ' +
@@ -425,12 +529,34 @@ const READ_BY_KIND = {
     'not be worked out ' +
     'because only one charge of it is on record. Same fields per row as above. Use it for ' +
     '"how much of this is monthly subscriptions"; for what is DUE rather than what happened, ' +
-    'use read_expected.',
+    'use read_expected. ' +
+    'And a third time in "plans", which is those two crossed — one row per period AND kind, ' +
+    'with "period" and "kind" fields of its own. THIS is the row to read for a question that ' +
+    'names both, such as new monthly subscriptions or yearly renewals. Never take the amount ' +
+    'from one list and the count from another: they are different groupings of the same money ' +
+    'and the pair does not describe anything. ' +
+    'BETTER STILL: pass "period" and/or "kind" as arguments and the answer comes back as ' +
+    '"matched", one figure for exactly what you asked. "8월 월간 구독 수익" is period=' +
+    PERIOD_MONTHLY + '; new monthly subscriptions is period=' + PERIOD_MONTHLY + ' with kind=' +
+    KIND_SUB + '. Quote "matched", not a row you chose yourself. If "matched" carries ' +
+    '"subscriptionsWithUnknownPeriod", that is subscription money whose period could not be ' +
+    'worked out — only one charge of it is on record — so it is in no period row and the ' +
+    'figure may be short by it. Say so.',
   parameters: {
     type: 'object',
     properties: {
       from: { type: 'string', description: 'First day of the range, YYYY-MM-DD. Omit for all time.' },
       to: { type: 'string', description: 'Last day of the range, YYYY-MM-DD. Omit for all time.' },
+      period: {
+        type: 'string',
+        enum: [...PERIODS, PERIOD_NONE],
+        description: 'Narrow to one billing period. Say it here rather than picking a row.',
+      },
+      kind: {
+        type: 'string',
+        enum: [...KINDS],
+        description: 'Narrow to one kind of sale. Say it here rather than picking a row.',
+      },
     },
     required: [],
     additionalProperties: false,
@@ -501,8 +627,36 @@ export const tools = (today, { recount } = {}) => [
       if (period && !PERIODS.includes(period)) {
         return { error: `period must be one of ${PERIODS.join(', ')}` }
       }
-      const { orders, zone, fx } = await stored()
-      return expectedFrom(orders, { from, to, period }, zone, fx, today)
+      const { orders, totals, adjustments, zone, fx } = await stored()
+      const ahead = expectedFrom(orders, { from, to, period }, zone, fx, today)
+      // A month already under way is part charged and part still to come, and
+      // "what will September bring" wants both. Added here rather than left to
+      // the model: it is one subtraction and one sum, and the last time this
+      // tally left arithmetic to a model it came back 5% wrong.
+      const closed = to < today ? to : today
+      const so_far = from <= closed
+        ? splitBy(
+          { field: 'plans', rows: 'plans', row: 'plan' },
+          totals, adjustments, { from, to: closed }, today,
+        )
+        : null
+      const charged = chargedIn(so_far, period)
+      const due = ahead.periods.reduce((n, r) => n + r.amount, 0)
+      return {
+        ...ahead,
+        // Named apart so the model cannot report one as the other. The days
+        // already counted are facts; only `stillDue` is the projection the
+        // `assumes` line is about.
+        chargedSoFar: charged.amount,
+        chargedSoFarFromSubscriptions: charged.subscriptions,
+        stillDue: due,
+        total: charged.amount + due,
+        totalFromSubscriptions: charged.subscriptions + due,
+        // Orders in a currency that could not be converted, so both figures
+        // above are short by them. Disclosed for the same reason every other
+        // read in this file discloses it.
+        ...(charged.uncounted ? { chargedSoFarUncounted: charged.uncounted } : {}),
+      }
     },
   },
   // Offered only when a caller handed one in. The options-page test button asks
