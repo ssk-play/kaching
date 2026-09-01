@@ -17,7 +17,7 @@ rm -f "$out"
 cd "$ext"
 zip -q -r "$out" \
   manifest.json rules.json \
-  background.js playconsole.js settings.js filters.js format.js fx.js health.js i18n.js ledger.js llm.js log.js orders.js telegram.js totals.js \
+  background.js playconsole.js settings.js filters.js format.js fx.js health.js i18n.js ledger.js llm.js log.js orders.js subs.js telegram.js totals.js \
   options.html options.js \
   _locales \
   icons \

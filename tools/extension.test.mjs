@@ -62,6 +62,7 @@ const O = await load('orders.js')
 const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, byKind, MAX_ROWS, tools: ledgerTools } = await load('ledger.js')
+const S = await load('subs.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
   summarize, compacted, RECAP, probe, CARRIES_BOTH, DROPS_TOOLS, DROPS_SYSTEM,
@@ -1022,6 +1023,8 @@ test('totals sum a day and a month from the same buckets', () => {
     // The same money dealt a second way. No kind was handed in either, so both
     // splits file under the unknown key and both still add up to the day.
     kinds: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
+    // And a third, for how often the money comes back. Nothing said, so '?'.
+    periods: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
   })
   // Same function answers the month, so the two figures cannot drift apart.
   assert.equal(T.sum(b, '2026-08').amount, 9000)
@@ -1037,6 +1040,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     currency: 'KRW', amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1,
     currencies: { NOK: { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
+    periods: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
   })
   // A refund with no charge to take back out is left out of the amount the same
   // way, and disclosed the same way: the message above it printed a figure, so
@@ -1048,6 +1052,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2,
     currencies: { NOK: { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
+    periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
   })
 })
 
@@ -1060,6 +1065,7 @@ test('a refund comes back out of the running total', () => {
     currency: 'KRW', amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0,
     currencies: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
+    periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
   })
 })
 
@@ -1078,17 +1084,18 @@ test('a correction moves the amount and leaves the counts alone', () => {
   // inventing an order would make the count disagree with the messages sent.
   const day = { '2026-08-19': { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } }
   const down = T.adjust({}, '2026-08-19', { currency: 'KRW', amount: -6500 })
-  // A correction belongs to no buyer, so it adds nothing to the split.
+  // A correction belongs to no buyer, no kind of sale and no billing period, so
+  // it adds nothing to any of the three splits.
   assert.deepEqual(T.sum(down, '2026-08-19'), {
     currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {},
+    currencies: {}, kinds: {}, periods: {},
   })
   // Both directions, and read together with what was announced.
   const up = T.adjust(down, '2026-08-19', { currency: 'KRW', amount: 500 })
   const both = T.combine(T.sum(day, '2026-08-19'), T.sum(up, '2026-08-19'))
   assert.deepEqual(both, {
     currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {},
+    currencies: {}, kinds: {}, periods: {},
   })
   // A correction in another currency is refused rather than added across.
   assert.equal(T.adjust(up, '2026-08-19', { currency: 'USD', amount: 5 }), null)
@@ -1954,27 +1961,357 @@ test('how many renewals, and what they were worth, is one read', () => {
   assert.equal('note' in out, false)
 })
 
-test('the model is offered both splits alongside the daily read', () => {
+test('the model is offered the splits, the projection and no writer by default', () => {
   const tools = ledgerTools('2026-08-25')
-  assert.deepEqual(tools.map((x) => x.spec.name), ['read_totals', 'read_by_currency', 'read_by_kind'])
-  for (const { spec } of tools.slice(1)) {
+  assert.deepEqual(
+    tools.map((x) => x.spec.name),
+    ['read_totals', 'read_by_currency', 'read_by_kind', 'read_expected'],
+  )
+  const spec = (name) => tools.find((x) => x.spec.name === name).spec
+  // Looked up by name rather than by position: a tool inserted in the middle
+  // would otherwise move these assertions quietly onto a different one.
+  for (const { spec: split } of tools.filter((x) => /^read_by_/.test(x.spec.name))) {
     // Both ends optional, or an all-time question costs a turn spent asking when
     // the tally began.
-    assert.deepEqual(spec.parameters.required, [], spec.name)
+    assert.deepEqual(split.parameters.required, [], split.name)
     // The amounts are in the developer's currency, not the row's. A model that
     // reads the row label as the unit reports INR sales in rupees.
-    assert.match(spec.description, /payoutCurrency/)
+    assert.match(split.description, /payoutCurrency/)
   }
   // The kinds are named in the description, because "renewal" is only the right
   // row to read if the model knows that is what the string will be.
-  const kinds = tools[2].spec.description
+  const kinds = spec('read_by_kind').description
   for (const kind of ['renewal', 'sub', 'buy']) assert.match(kinds, new RegExp(`"${kind}"`))
   // And that a renewal's "orders" is the count being asked for. Told only that
   // it counts charges, a model asked "how many renewals" reaches for read_totals
   // and adds up days.
   assert.match(kinds, /number of renewals/)
+  // The same money split a third way, and named as such — a model told only that
+  // "periods" exists cannot know that "monthly" is the string to look for.
+  for (const period of ['monthly', 'weekly', 'yearly']) assert.match(kinds, new RegExp(period))
+
+  // The projection is the one tool that answers about days that have not
+  // happened, so its ceiling has to be in the description the model reads rather
+  // than only in the field it might skip.
+  const ahead = spec('read_expected')
+  assert.deepEqual(ahead.parameters.required, ['from', 'to'])
+  assert.match(ahead.description, /ceiling and not a forecast/)
+  assert.match(ahead.description, /cancellations/)
 })
 
+test('the writing tool is offered only when there is something to run it', () => {
+  // The options-page test button asks its question with no recount to give. A
+  // tool the model can call and the caller cannot run is worse than one it never
+  // sees: the model spends a turn on it and gets an error back.
+  assert.ok(!ledgerTools('2026-08-25').some((x) => x.spec.name === 'run_recount'))
+
+  const asked = []
+  const withWrite = ledgerTools('2026-08-25', { recount: (p) => (asked.push(p), 'done') })
+  const run = withWrite.find((x) => x.spec.name === 'run_recount')
+  assert.ok(run, 'run_recount is missing when a recount was handed in')
+  assert.equal(run.run({ period: '2026-06' }), 'done')
+  assert.deepEqual(asked, ['2026-06'])
+  // Idempotence is the reason this is allowed to write at all, so the model has
+  // to be told it — one that thinks a second run doubles the tally will refuse a
+  // retry the developer asked for.
+  assert.match(run.spec.description, /removes nothing/)
+  // And that a year is too long to hold a chat open for.
+  assert.match(run.spec.description, /\/recount/)
+})
+
+
+// One subscription's charges, as Play numbers them: the first has no suffix and
+// every automatic renewal carries "..N" on the same base id.
+const sub = (base, n, at, amount = 5000) => ({
+  id: n == null ? base : `${base}..${n}`,
+  at: Date.parse(at),
+  state: 'charged',
+  subscription: true,
+  packageName: 'com.example.app',
+  sku: 'premium',
+  total: { currency: 'KRW', amount },
+  net: { currency: 'KRW', amount },
+  beforeFee: { currency: 'KRW', amount },
+})
+
+test('a billing period is measured from the run, not read off one order', () => {
+  // Play sends no plan with an order — playconsole.js reads a subscription flag
+  // and nothing else. What it does send is an id that repeats across renewals,
+  // so the gap between two charges of the same base id IS the period.
+  const monthly = [sub('GPA.M', null, '2026-06-10T00:00:00Z'), sub('GPA.M', 0, '2026-07-10T00:00:00Z')]
+  const yearly = [sub('GPA.Y', null, '2025-03-01T00:00:00Z'), sub('GPA.Y', 0, '2026-03-01T00:00:00Z')]
+  const weekly = [sub('GPA.W', null, '2026-08-01T00:00:00Z'), sub('GPA.W', 0, '2026-08-08T00:00:00Z')]
+  const found = S.subscriptions([...monthly, ...yearly, ...weekly])
+  assert.equal(found.get('GPA.M').period, T.PERIOD_MONTHLY)
+  assert.equal(found.get('GPA.Y').period, T.PERIOD_YEARLY)
+  assert.equal(found.get('GPA.W').period, T.PERIOD_WEEKLY)
+
+  // Seen once, so there is no gap to measure. Answered as unknown rather than as
+  // the likeliest plan: a guess here becomes a figure in a revenue projection.
+  const once = S.subscriptions([sub('GPA.N', null, '2026-08-01T00:00:00Z')])
+  assert.equal(once.get('GPA.N').period, T.UNKNOWN_PERIOD)
+
+  // A gap that matches no plan stays unknown rather than rounding to the nearest.
+  assert.equal(S.periodForGap(60), T.UNKNOWN_PERIOD)
+  assert.equal(S.periodForGap(1), T.UNKNOWN_PERIOD)
+
+  // The most recent gap, not an average: a plan that moved from monthly to
+  // yearly bills yearly next, and averaging the two would say quarterly.
+  const moved = S.subscriptions([
+    sub('GPA.C', null, '2025-01-05T00:00:00Z'),
+    sub('GPA.C', 0, '2025-02-05T00:00:00Z'),
+    sub('GPA.C', 1, '2026-02-05T00:00:00Z'),
+  ])
+  assert.equal(moved.get('GPA.C').period, T.PERIOD_YEARLY)
+
+  // A one-off purchase has no run and no period at all.
+  assert.equal(S.periodLookup([{ id: 'GPA.B', at: 0, state: 'charged' }])({ id: 'GPA.B' }), null)
+})
+
+test('the periods split reaches the model, and adds back up to the days', () => {
+  // End to end: orders in, folded to days, read back out as the model sees it.
+  // The period cannot be read off one order, so this is really a test that the
+  // fold works out the runs first and hands the answer down to every day.
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = [
+    sub('GPA.M', null, '2026-08-01T00:00:00Z'), sub('GPA.M', 0, '2026-08-31T00:00:00Z'),
+    { id: 'GPA.B', at: Date.parse('2026-08-05T00:00:00Z'), state: 'charged',
+      total: { currency: 'KRW', amount: 3000 }, net: { currency: 'KRW', amount: 3000 } },
+  ]
+  const totals = O.foldDays(orders, zone, fx)
+  const out = byKind(totals, {}, { from: '2026-08-01', to: '2026-08-31' }, '2026-09-02')
+
+  const by = Object.fromEntries(out.periods.map((r) => [r.period, r]))
+  assert.equal(by.monthly.orders, 2)
+  assert.equal(by.monthly.amount, 10000)
+  // A one-off purchase is filed under its own key rather than left out, so the
+  // split is a total and not a total-for-subscriptions.
+  assert.equal(by.none.orders, 1)
+  assert.equal(by.none.amount, 3000)
+
+  // The three splits are the same money dealt three ways, so they add up to each
+  // other. A period row that drifted from the kind rows would be a second
+  // reading of the orders rather than a re-filing of the day.
+  const sumOf = (rows) => rows.reduce((n, r) => n + r.amount, 0)
+  assert.equal(sumOf(out.periods), sumOf(out.kinds))
+  assert.equal(sumOf(out.periods), 13000)
+})
+
+test('the month ahead is a ceiling, and says so', () => {
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = [
+    // Monthly, last charged 12 August — due again 12 September.
+    sub('GPA.M', null, '2026-07-12T00:00:00Z'), sub('GPA.M', 0, '2026-08-12T00:00:00Z'),
+    // Yearly, last charged 1 March — not due in September.
+    sub('GPA.Y', null, '2025-03-01T00:00:00Z'), sub('GPA.Y', 0, '2026-03-01T00:00:00Z'),
+    // Monthly, but the last charge was handed back. Projecting the next one from
+    // it would forecast revenue from a buyer who was just made whole.
+    sub('GPA.R', null, '2026-07-20T00:00:00Z'),
+    { ...sub('GPA.R', 0, '2026-08-20T00:00:00Z'), state: 'refunded' },
+    // Seen once, so no period and no projection — but counted as a gap in the
+    // answer rather than passed over in silence.
+    sub('GPA.N', null, '2026-08-25T00:00:00Z'),
+  ]
+  const out = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  assert.deepEqual(out.periods, [
+    // The settled net of the last charge, not a fee estimate off its price:
+    // Play already told us what that renewal was worth, and the next one is
+    // projected at the same figure.
+    { period: T.PERIOD_MONTHLY, charges: 1, subscriptions: 1, amount: 5000, uncounted: 0 },
+  ])
+  assert.equal(out.subscriptionsWithUnknownPeriod, 1)
+  assert.match(out.assumes, /ceiling/)
+  assert.equal(out.payoutCurrency, 'KRW')
+
+  // Asked for one plan, only that plan is projected.
+  const yearly = S.expected(orders, { from: '2026-09-01', to: '2026-09-30', period: T.PERIOD_YEARLY }, zone, fx, '2026-09-02')
+  assert.deepEqual(yearly.periods, [])
+
+  // A due date that has already passed is not expected revenue: nothing will
+  // ever settle against a day that has been and gone.
+  const behind = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-20')
+  assert.deepEqual(behind.periods, [])
+})
+
+test('every charge due in the range is projected, not just the next one', () => {
+  // The bug this exists for: projecting one period forward and stopping. A
+  // weekly plan bills four times in a month, so a month asked about came back at
+  // a quarter of its real figure — and it was labelled a ceiling, so the model
+  // reported a quarter of the answer as an upper bound.
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  const weekly = [sub('GPA.W', null, '2026-08-23T00:00:00Z'), sub('GPA.W', 0, '2026-08-30T00:00:00Z')]
+  const out = S.expected(weekly, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  // 6th, 13th, 20th and 27th of September.
+  assert.deepEqual(out.periods, [
+    { period: T.PERIOD_WEEKLY, charges: 4, subscriptions: 1, amount: 20000, uncounted: 0 },
+  ])
+
+  // And the other half of the same bug: a range further out than one period.
+  // Every monthly subscription was last charged in August, so a question about
+  // October used to project into September, match nothing, and answer "nothing
+  // is due" — the opposite of the truth, for the question the tool exists for.
+  const monthly = [sub('GPA.M', null, '2026-07-28T00:00:00Z'), sub('GPA.M', 0, '2026-08-28T00:00:00Z')]
+  const october = S.expected(monthly, { from: '2026-10-01', to: '2026-10-31' }, zone, fx, '2026-09-02')
+  assert.deepEqual(october.periods, [
+    { period: T.PERIOD_MONTHLY, charges: 1, subscriptions: 1, amount: 5000, uncounted: 0 },
+  ])
+})
+
+test('a projection says which currency it is in, or counts nothing', () => {
+  // Before a payout has ever been observed there is no developer currency to
+  // report in. Taking one from whichever subscription came first would name a
+  // buyer's currency as the payout currency and file every other one as
+  // unconvertible — and disagree with read_by_kind about the same store.
+  const zone = 'Asia/Seoul'
+  const orders = [
+    sub('GPA.K', null, '2026-07-12T00:00:00Z'), sub('GPA.K', 0, '2026-08-12T00:00:00Z'),
+  ]
+  const out = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, { currency: null, rates: {} }, '2026-09-02')
+  assert.equal(out.payoutCurrency, null)
+  assert.equal(out.periods[0].amount, 0)
+  assert.equal(out.periods[0].uncounted, 1)
+})
+
+test('a subscription that stopped is not reported as a gap in the projection', () => {
+  // The caveat has to be worth reading. Counted over the whole store, a tally
+  // holding hundreds of long-dead single-charge subscriptions told the model a
+  // one-week figure was "short by 500 subscriptions", which teaches the reader
+  // to skip caveats — including the one that matters.
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = [
+    sub('GPA.OLD', null, '2024-01-05T00:00:00Z'),
+    sub('GPA.NEW', null, '2026-08-25T00:00:00Z'),
+  ]
+  const out = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  // Only the recent one. Past the longest plan Play sells, a subscription that
+  // never billed a second time is not going to.
+  assert.equal(out.subscriptionsWithUnknownPeriod, 1)
+})
+
+test('the projection refuses a period it does not sell', () => {
+  const zone = 'Asia/Seoul'
+  const run = ledgerTools('2026-09-02').find((x) => x.spec.name === 'read_expected').run
+  void zone
+  return run({ from: '2026-09-01', to: '2026-09-30', period: 'Monthly' }).then((out) => {
+    // Filtered on rather than refused, an off-list value matches no plan and the
+    // answer comes back empty — which the model reports as "nothing is due".
+    assert.match(out.error, /period must be one of/)
+  })
+})
+
+test('only subscriptions actually due in the range are counted in it', () => {
+  // The count and the money have to describe the same set. Counting every
+  // subscription of a plan that reached the row — including ones due next March
+  // — reported four yearly renewals against one charge's worth of money, and
+  // gave a different count depending on the order the store happened to be in.
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  // Last charged a year before, so both are due again a year after that: GPA.A
+  // on 2026-09-20 and GPA.B on 2027-02-01.
+  const due = [sub('GPA.A', null, '2024-09-20T00:00:00Z', 40000), sub('GPA.A', 0, '2025-09-20T00:00:00Z', 40000)]
+  const notDue = [sub('GPA.B', null, '2025-02-01T00:00:00Z', 40000), sub('GPA.B', 0, '2026-02-01T00:00:00Z', 40000)]
+  const out = S.expected([...due, ...notDue], { from: '2026-09-25', to: '2026-10-31' }, zone, fx, '2026-09-02')
+  // GPA.A renewed on the 20th, before this range opens; GPA.B is due in
+  // February. Neither is due here, so the answer is empty rather than a count of
+  // the subscriptions that happen to exist.
+  assert.deepEqual(out.periods, [])
+
+  // And the order of the store cannot change the answer.
+  const forwards = S.expected([...due, ...notDue], { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  const backwards = S.expected([...notDue, ...due], { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  assert.deepEqual(forwards.periods, backwards.periods)
+  assert.deepEqual(forwards.periods, [
+    { period: T.PERIOD_YEARLY, charges: 1, subscriptions: 1, amount: 40000, uncounted: 0 },
+  ])
+})
+
+test('what the projection had to leave out is named, never silently dropped', () => {
+  const zone = 'Asia/Seoul'
+  const fx = { currency: 'KRW', rates: {} }
+  const range = { from: '2026-09-03', to: '2026-09-30' }
+
+  // A chargeback batch would otherwise shrink the figure with nothing to say so.
+  const reversed = [
+    sub('GPA.R', null, '2026-07-10T00:00:00Z'),
+    { ...sub('GPA.R', 0, '2026-08-10T00:00:00Z'), state: 'refunded' },
+  ]
+  assert.equal(S.expected(reversed, range, zone, fx, '2026-09-02').subscriptionsSkippedAfterRefund, 1)
+
+  // A subscription whose only charge lands after the range was not missing from
+  // it — it did not exist yet, so it is no caveat either.
+  const later = [sub('GPA.L', null, '2026-08-25T00:00:00Z')]
+  const past = S.expected(later, { from: '2026-01-01', to: '2026-01-31' }, zone, fx, '2026-09-02')
+  assert.equal(past.subscriptionsWithUnknownPeriod, undefined)
+  assert.deepEqual(past.periods, [])
+
+  // A range so wide the walk stops short of it says so, because a truncated
+  // figure and a complete one are the same number otherwise.
+  const weekly = [sub('GPA.W', null, '2026-08-23T00:00:00Z'), sub('GPA.W', 0, '2026-08-30T00:00:00Z')]
+  const far = S.expected(weekly, { from: '2026-09-01', to: '2099-12-31' }, zone, fx, '2026-09-02')
+  assert.equal(far.truncated, true)
+  const near = S.expected(weekly, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, '2026-09-02')
+  assert.equal(near.truncated, undefined)
+})
+
+test('a range that straddles the last charge, or reaches years past it, still projects', () => {
+  // Two questions, one measure, and it answered neither. Judging staleness
+  // against the range start dropped every subscription whose last charge came
+  // after the range opened — so "August through October" reported nothing due,
+  // while "September 3rd through October" reported it correctly. Judging it
+  // against the range end instead called every live subscription stale as soon
+  // as the range reached far enough ahead.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const monthly = [
+    sub('GPA.M', null, '2026-07-02T00:00:00Z'),
+    sub('GPA.M', 0, '2026-08-02T00:00:00Z'),
+    sub('GPA.M', 1, '2026-09-02T00:00:00Z'),
+  ]
+  const today = '2026-09-02'
+  // Opens the day before the last charge.
+  const straddling = S.expected(monthly, { from: '2026-09-01', to: '2026-10-31' }, zone, fx, today)
+  assert.equal(straddling.periods[0].charges, 1)
+  // Opens years before the tally did.
+  const wide = S.expected(monthly, { from: '2020-01-01', to: '2026-12-31' }, zone, fx, today)
+  assert.equal(wide.periods[0].charges, 3)
+  // Reaches years past the last charge.
+  const yearly = [sub('GPA.Y', null, '2025-09-02T00:00:00Z'), sub('GPA.Y', 0, '2026-09-02T00:00:00Z')]
+  const far = S.expected(yearly, { from: '2028-01-01', to: '2028-12-31' }, zone, fx, today)
+  assert.equal(far.periods[0].charges, 1)
+})
+
+test('a caveat is scoped to the plan the question named', () => {
+  // A monthly reversal is no caveat on an answer about yearly plans.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const reversed = [
+    sub('GPA.R', null, '2026-08-02T00:00:00Z'),
+    { ...sub('GPA.R', 0, '2026-09-02T00:00:00Z'), state: 'refunded' },
+  ]
+  const range = { from: '2026-09-03', to: '2026-10-31' }
+  assert.equal(S.expected(reversed, range, zone, fx, '2026-09-02').subscriptionsSkippedAfterRefund, 1)
+  assert.equal(
+    S.expected(reversed, { ...range, period: T.PERIOD_YEARLY }, zone, fx, '2026-09-02')
+      .subscriptionsSkippedAfterRefund,
+    undefined,
+  )
+})
+
+test('a monthly plan due on the 31st does not fall off a short month', () => {
+  // Play pulls the charge back to the last day the month has and returns to the
+  // 31st after it. Thirty days added blindly would drift the plan by five days a
+  // year and put a renewal in the wrong month twice a year.
+  assert.equal(S.nextDue('2026-01-31', T.PERIOD_MONTHLY), '2026-02-28')
+  assert.equal(S.nextDue('2024-01-31', T.PERIOD_MONTHLY), '2024-02-29')
+  assert.equal(S.nextDue('2026-12-15', T.PERIOD_MONTHLY), '2027-01-15')
+  assert.equal(S.nextDue('2026-03-01', T.PERIOD_YEARLY), '2027-03-01')
+  assert.equal(S.nextDue('2026-08-01', T.PERIOD_WEEKLY), '2026-08-08')
+  assert.equal(S.nextDue('2026-08-01', T.UNKNOWN_PERIOD), null)
+})
 
 test('a period can leave off the parts today already answers', () => {
   // The day someone wants to fetch again is nearly always in the month they are
@@ -1982,23 +2319,34 @@ test('a period can leave off the parts today already answers', () => {
   const today = '2026-08-26'
   const p = (text) => T.periodOf(text, today)
   // Bare is the whole lot: that is what someone typing a command called "fetch
-  // it again" is asking for. Today is one tap away as the day of the month.
+  // it again" is asking for.
   assert.deepEqual(p(''), { all: true, to: today })
   assert.deepEqual(p('today'), { from: today, to: today })
   assert.deepEqual(p('오늘'), { from: today, to: today })
-  assert.deepEqual(p('26'), { from: today, to: today })
-  assert.deepEqual(p('20'), { from: '2026-08-20', to: '2026-08-20' })
-  assert.deepEqual(p('7'), { from: '2026-08-07', to: '2026-08-07' })
+  // What is left off is filled in from the left, so a lone number is a month —
+  // which is the span a recount is actually asked for. A day is one keystroke
+  // longer, and still there.
+  assert.deepEqual(p('6'), { from: '2026-06-01', to: '2026-06-30' })
+  assert.deepEqual(p('06'), { from: '2026-06-01', to: '2026-06-30' })
+  assert.deepEqual(p('6월'), { from: '2026-06-01', to: '2026-06-30' })
   assert.deepEqual(p('06-20'), { from: '2026-06-20', to: '2026-06-20' })
   assert.deepEqual(p('2025-12-31'), { from: '2025-12-31', to: '2025-12-31' })
-  // Four digits is a year, one or two is a day. Nothing here has two readings,
-  // which is why a month has to be written with its year.
+  // A number that is no month is refused rather than read as something else.
+  // Before this it was the 20th of the month someone was standing in, so the
+  // refusal has to be a refusal — quietly answering for June the 20th, or for
+  // 2020, is how a recount lands on a span nobody asked for.
+  assert.equal(p('20'), null)
+  assert.equal(p('13'), null)
+  // Four digits is a year. A month may still be written with one.
   assert.deepEqual(p('2026-06'), { from: '2026-06-01', to: '2026-06-30' })
   assert.deepEqual(p('2025'), { from: '2025-01-01', to: '2025-12-31' })
   // February in a leap year, worked out rather than looked up in a table.
   assert.deepEqual(p('2024-02'), { from: '2024-02-01', to: '2024-02-29' })
+  // The month being stood in is trimmed to the part of it that has happened.
+  assert.deepEqual(p('8'), { from: '2026-08-01', to: today })
   // A month that has not started is not a period to fetch again.
   assert.equal(p('2026-12'), null)
+  assert.equal(p('12'), null)
 })
 
 test('a period still running is trimmed to the part of it that has happened', () => {
@@ -2299,6 +2647,64 @@ globalThis.chrome.action = {
 globalThis.chrome.cookies = { get: async () => ({ value: 'SAPISID' }) }
 globalThis.chrome.permissions = { contains: async () => true }
 const background = await load('background.js')
+
+test('a stalled window costs its own days, not the whole recount', async () => {
+  // A recount walks the span newest-first over many requests and can run for two
+  // minutes. When one window stalls, the orders the earlier windows already
+  // returned are the expensive part — throwing unwinds the walk and drops every
+  // one of them, and the reader is told only that something timed out.
+  //
+  // A stall is also not a window Play refused for being too wide: halving it
+  // spends six more twenty-second waits on the same dead connection.
+  const zone = 'UTC'
+  storage = {
+    botToken: 'b', chatId: '1', developerId: '1', timeZone: zone, days: 30,
+    bootstrapped: true, seen: [], delivered: [], payoutCurrency: 'KRW', rates: {},
+    consoleUrl: 'https://play.google.com/console/u/0/developers/1/orders',
+  }
+  const today = T.dayKey(Date.now(), zone)
+  const recent = Date.now() - 2 * 86_400_000
+  const asPlay = (id, at) => ({
+    '1': id, '33': 2, '12': 1, '11': { '1': 'Pro', '2': 'pro' }, '13': 'com.example.app',
+    '14': { '2': 'KR' }, '15': { '1': 'KRW', '2': '5000' }, '27': { '1': 'KRW', '2': '5000' },
+    '28': { '1': 'KRW', '2': '5000' }, '9': String(at), '7': [],
+  })
+
+  let windows = 0
+  const stalled = []
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('sendMessage')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 1 } }) }
+    }
+    const body = JSON.parse(init.body)
+    const from = Number(body['4']['1']['1']) * 1000
+    windows += 1
+    // The newest window answers; every older one stalls the way a dead
+    // connection does, which is what AbortSignal.timeout produces.
+    void from
+    if (windows > 1) {
+      stalled.push(windows)
+      const err = new Error('signal timed out')
+      err.name = 'TimeoutError'
+      throw err
+    }
+    return { ok: true, status: 200, json: async () => ({ '1': [asPlay('KEPT', recent)] }) }
+  }
+
+  const reply = await background.recount(await load('settings.js').then((m) => m.load()), 'all')
+  assert.ok(typeof reply === 'string' && reply.length > 0)
+
+  // The order the reachable window returned is stored, not lost with the stall.
+  const kept = await O.readAll(zone)
+  assert.deepEqual(kept.map((o) => o.id), ['KEPT'])
+
+  // And the walk gave up rather than spending its whole budget twenty seconds at
+  // a time: far fewer requests than the ceiling, and no halving of the dead
+  // window into fourteen more of the same.
+  assert.ok(windows < 20, `walked ${windows} windows`)
+  assert.ok(stalled.length <= 4, `stalled ${stalled.length} times`)
+  void today
+})
 
 test('an order stored by a run that could not send it is announced once, and counted once', async () => {
   const zone = 'UTC'

@@ -527,6 +527,17 @@ const RECOUNT_MAX_DAYS = MAX_BUCKET_DAYS
 // not depend on it being right.
 const RECOUNT_WINDOW_DAYS = 45
 
+// AbortSignal.timeout rejects with a TimeoutError DOMException. Named here
+// rather than matched on its message, which is not the same string in every
+// engine the tests and the browser run in.
+const timedOut = (err) => err?.name === 'TimeoutError' || /timeout/i.test(String(err?.message ?? err))
+
+// How many stalled windows before the walk gives up on this run. Three, because
+// one is a hiccup and the fourth would be another twenty seconds spent proving
+// what the first three said. What has been fetched is still merged, and the
+// reply names the days it could not reach.
+const MAX_STALLS = 3
+
 const daysBetween = (from, to) =>
   (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1
 
@@ -562,6 +573,22 @@ async function ordersWithin(developerId, zone, from, to, short, budget) {
     // A rejected session is not a window that was too wide, and halving it
     // fourteen times would turn one honest error into a hundred.
     if (span <= 1 || /auth/.test(String(err?.message ?? err))) throw err
+    // Neither is a request that stalled. Play answers a span it will not serve
+    // with a 500, straight away; a stall is the connection. Halving it would
+    // spend six more twenty-second waits on the same dead link — and thrown, it
+    // would unwind the whole walk and drop every order the newer windows already
+    // returned, which is worse than the gap it is reporting.
+    //
+    // So the window is recorded as one this run could not reach, exactly like a
+    // day Play would not serve, and the walk carries on with what it has. After
+    // a few of them the connection is the problem rather than the window, and
+    // the budget is spent rather than burned twenty seconds at a time.
+    if (timedOut(err)) {
+      short.push(from)
+      budget.stalls = (budget.stalls ?? 0) + 1
+      if (budget.stalls >= MAX_STALLS) budget.left = 0
+      return []
+    }
   }
   if (got && got.length < RECOUNT_PAGE) {
     // The widest window Play has actually served. Whatever it will take is not
@@ -650,7 +677,11 @@ const widestSpan = (today) => shift(today, -(RECOUNT_MAX_DAYS - 2))
 // removes anything, so a page that came back short simply refreshes fewer
 // orders than it might have. There is no figure to overwrite, because the
 // figures are folded out of the store on the way to being read.
-async function recount(s, arg) {
+// Exported for the same reason poll is: the walk that fetches a span, the
+// merge that stores it and the reply that reports what it could not reach only
+// agree with each other end to end, and a stall in the middle is the case no
+// test of any one of them catches.
+export async function recount(s, arg) {
   const zone = zoneOf(s)
   const today = dayKey(Date.now(), zone)
   const asked = periodOf(arg, today)
@@ -685,25 +716,33 @@ async function recount(s, arg) {
   // these orders belong to an account the user has just finished clearing, and
   // the check has to hold at the moment of the write rather than when it was
   // queued.
-  const { was, adopted, now } = await claim(async () => {
+  const { was, adopted, now, changed } = await claim(async () => {
     if (epoch !== resetEpoch) return {}
     const kept = await ordersRead(from, to, zone)
     const known = new Set(kept.map((o) => o.id))
     await ordersWrite(wanted, zone)
+    const before = foldDays(kept, zone, fx)
+    const after = foldDays(await ordersRead(from, to, zone), zone, fx)
+    // A correction entered by hand for a day this has just refreshed has nothing
+    // left to patch: the day is now what Play says it is.
+    //
+    // Dropped here rather than after the mutex is released. A second trip
+    // through it is a second chance to be torn down mid-way, and this one never
+    // retries: run again, the orders are already stored, so `was` and `now`
+    // match, no day reads as changed, and the superseded correction is added to
+    // Play's own figure for good.
+    const moved = daysApart(before, after, from, to)
+    if (moved.length) await dropCorrections(moved, epoch)
     return {
-      was: foldDays(kept, zone, fx),
+      was: before,
+      now: after,
       adopted: wanted.filter((o) => !known.has(o.id)).length,
-      now: foldDays(await ordersRead(from, to, zone), zone, fx),
+      changed: moved,
     }
   })
   if (!now) return t('totalRecountUntouched')
   const figures = sumRange(now, from, to)
   const drift = figures.amount - sumRange(was, from, to).amount
-  const changed = daysApart(was, now, from, to)
-
-  // A correction entered by hand for a day this has just refreshed has nothing
-  // left to patch: the day is now what Play says it is.
-  if (changed.length) await dropCorrections(changed, epoch)
 
   const moved = changed.length
     ? t('totalRecountMovedDays', changed.length, `${drift > 0 ? '+' : ''}${drift}`)
@@ -740,6 +779,11 @@ function daysApart(was, now, from, to) {
 }
 
 async function dropCorrections(days, epoch) {
+  // Called from inside recount's claim, so it takes no mutex of its own — one
+  // taken here would queue behind the block already holding it and never run.
+  // Being in there is the point: it was safe outside only while a recount could
+  // start in one place, the command loop, which runs them one at a time. The
+  // model can start one now, and a turn's tool calls are run with Promise.all.
   const { adjustments } = await chrome.storage.local.get({ adjustments: {} })
   const next = { ...adjustments }
   let dropped = false
@@ -754,8 +798,12 @@ async function dropCorrections(days, epoch) {
 
 // One writer at a time. chrome.storage has no transactions, so a poll and a
 // recount merging into the same month chunk at once would each read it, each
-// add their own orders, and the second write would drop the first's. Every
-// write to the store goes through here.
+// add their own orders, and the second write would drop the first's.
+//
+// Every write to the orders and to the corrections goes through here. The
+// learned rates do not, and a poll landing mid-recount can still lose one — a
+// rate is re-learned from the next sale in that currency, so the cost is an
+// order printing as uncounted until then rather than a figure that stays wrong.
 let writing = Promise.resolve()
 function claim(work) {
   const next = writing.then(work, work)
@@ -803,7 +851,7 @@ async function answerQuestion(s, said) {
   try {
     const answer = await ask({
       apiKey: s.aiKey, baseUrl: s.aiBaseUrl, model: s.aiModel,
-      question, today, tools: ledgerTools(today),
+      question, today, tools: ledgerTools(today, { recount: (arg) => recountForModel(s, arg) }),
       history: freshTurns(chatTurns, now),
     })
     const next = nextTurns(chatTurns, now, question, answer)
@@ -1152,6 +1200,35 @@ async function announceRecovery(s, st) {
   if (st.fails < FAILS_BEFORE_ALERT) return
   await sendTelegram(s.botToken, s.chatId, label(s, t('tgRecovered'))).catch(() => {})
   await record('info', 'logRecovered')
+}
+
+
+// The model's way in. Same recount as above, with a ceiling on the span: the
+// chat that asked is held open while this fetches from Play, and a year of
+// requests outlives it. A day or a month is what a question about a wrong figure
+// actually names; anything wider is handed back as the command to type.
+//
+// Not a second implementation of the parse. periodOf settles what "6" means in
+// exactly one place, so the model and the developer typing /recount cannot end
+// up recounting different months from the same word.
+
+// A whole month, and nothing wider. Measured as the span itself rather than
+// through backTo, which adds slack for Play's own reporting lag and would put a
+// thirty-one day month over a thirty-one day ceiling.
+const RECOUNT_IN_CHAT_DAYS = 31
+
+async function recountForModel(s, arg) {
+  const today = dayKey(Date.now(), zoneOf(s))
+  const asked = periodOf(arg, today)
+  if (!asked) return t('cmdRecountUsage', RECOUNT_MAX_DAYS)
+  if (asked.all || daysBetween(asked.from, asked.to) > RECOUNT_IN_CHAT_DAYS) {
+    // Handed back as the command to type rather than started and abandoned. A
+    // recount the chat stopped waiting for still runs, still writes, and still
+    // answers into nothing — the developer would be told it failed and see the
+    // tally move anyway.
+    return t('cmdRecountTooWide', String(arg || 'all'))
+  }
+  return recount(s, arg)
 }
 
 const DELIVERY_PREFIX = 'telegram: '

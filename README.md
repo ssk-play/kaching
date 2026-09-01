@@ -23,7 +23,9 @@ back**, so `/today` changes with it. `/adjust` patches a day by hand instead:
 ```
 /recount                      everything Play still has
 /recount today                just today
-/recount 20                   the 20th of this month
+/recount 6                    June of this year
+/recount 6월                  the same
+/recount 08-20                the 20th of August this year
 /recount 2026-08              a whole month
 /adjust -6500                 today, down by 6,500
 /adjust +5000                 today, up by 5,000

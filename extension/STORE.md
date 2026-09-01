@@ -43,13 +43,19 @@ phone beyond Telegram itself.
   them, so a payout Play settles later, or a question you only think of next
   month, is answered without re-fetching anything
 - `/recount` fetches from Play again and merges what comes back — everything, or
-  a day, a month or a year (`/recount 2026-08`) — and `/adjust -6500` patches a
-  day by hand, either direction, any day
+  a day, a month or a year (`/recount 2026-08`, or just `/recount 6` for June) —
+  and `/adjust -6500` patches a day by hand, either direction, any day
+- Subscriptions are told apart by how often they bill. Weekly, monthly,
+  quarterly and yearly plans are worked out from the gap between one charge and
+  the next, so "how much of this is monthly" is a question with an answer
 - Anything you type that is not a command is answered as a question about the
   totals — "how did last week go, day by day", "how many subscription renewals
-  in August and what were they worth" — by reading the same tally.
-  Optional, off until you enter your own API key, and read-only: it cannot
-  change a figure. `/compact` sums the conversation up so far and carries on from
+  in August and what were they worth", "what should September's monthly renewals
+  bring in" — by reading the same tally. The last of those is a ceiling rather
+  than a forecast, and the answer says so: nothing here can see a cancellation
+  coming. It can also run a `/recount` for a day or a month when you ask it to,
+  which is safe to repeat because a recount merges rather than replaces.
+  Optional, off until you enter your own API key. `/compact` sums the conversation up so far and carries on from
   the recap. Works with any OpenAI-compatible service — OpenAI by
   default, or a cheaper provider, a gateway, or a model on your own machine
 
