@@ -60,11 +60,19 @@ and anything else you type is answered too — no prefix, no menu entry to find:
 → 갱신 36건, 161,000원 (환불 1건 -4,600원)
 ```
 
-It reads the tally three ways: day by day, split by the currency the buyer paid
-in, and split by whether each sale was a one-off purchase, a new subscription or
-a renewal. Anything outside those three — a figure per app or per product, a
-country rather than a currency, why a number moved — it says it cannot answer
-rather than assembling one out of parts that were not measured together.
+It reads the tally four ways: day by day (or by week, month or year), split by
+the currency the buyer paid in, split by whether each sale was a one-off
+purchase, a new subscription or a renewal, and those last two crossed with how
+often the subscription bills — so "August's new monthly subscriptions" is one
+figure rather than two that have to be combined. It can also say what the
+subscriptions on record are due to bill in a month still to come, which is a
+ceiling and says so: it cannot see a cancellation.
+
+Anything outside that — a figure per app or per product, a country rather than a
+currency, why a number moved — it says it cannot answer rather than assembling
+one out of parts that were not measured together. That rule is why the grouping
+and the crossing are done here rather than left to the model: asked to combine
+two lists itself, it took an amount from one and a count from the other.
 
 The last four exchanges are kept for half an hour, which is what lets the second
 question mean anything. After that a question stands on its own again. `/compact`

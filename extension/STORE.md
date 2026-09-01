@@ -47,7 +47,9 @@ phone beyond Telegram itself.
   and `/adjust -6500` patches a day by hand, either direction, any day
 - Subscriptions are told apart by how often they bill. Weekly, monthly,
   quarterly and yearly plans are worked out from the gap between one charge and
-  the next, so "how much of this is monthly" is a question with an answer
+  the next, and crossed with whether each charge started a subscription or
+  renewed one — so "how much of August was new monthly subscriptions" is a
+  question with one answer rather than two numbers to combine
 - Anything you type that is not a command is answered as a question about the
   totals — "how did last week go, day by day", "how many subscription renewals
   in August and what were they worth", "what should September's monthly renewals

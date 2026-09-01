@@ -200,14 +200,14 @@ export function weekStart(key) {
 
 const empty = () => ({
   currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-  currencies: {}, kinds: {}, periods: {},
+  currencies: {}, kinds: {}, periods: {}, plans: {},
 })
 
 // The splits a day is dealt into besides its own total. Named in one place
 // because every fold, every merge and every read has to walk the same list —
 // a third one added to some of them and not the others is a figure that stops
 // adding up to the day it came from.
-const SPLITS = ['currencies', 'kinds', 'periods']
+const SPLITS = ['currencies', 'kinds', 'periods', 'plans']
 
 // A buyer whose currency Play did not report. Filed under a key rather than
 // dropped, so the split always accounts for every order in the day — and so a
@@ -251,6 +251,18 @@ export const PERIOD_YEARLY = 'yearly'
 // other two splits file '?': a total that omits what it could not classify reads
 // as a total.
 export const UNKNOWN_PERIOD = '?'
+
+// The two subscription splits crossed: "monthly" and "sub" in one key, because
+// "how much of August was new monthly subscriptions" is a question neither of
+// them can answer alone and the model will answer it anyway. Asked with only the
+// two, it took the amount from the period row and the count from the kind row
+// and welded them together — 38,000 from one and four orders from the other,
+// where the answer was 18,000 and three.
+//
+// A cross of two splits rather than a third dimension of its own, so it still
+// adds back up to the day: every order is in exactly one of these, as it is in
+// exactly one currency and one kind.
+export const planKey = (period, kind) => `${period ?? UNKNOWN_PERIOD}:${kind || UNKNOWN_KIND}`
 
 // The same payout-currency figure that went into the day's own amount, only
 // filed under the currency the buyer paid in. Deliberately not a second
@@ -307,6 +319,8 @@ export function recordInto(buckets, key, { net, refund, currency, from, kind, pe
   // "how many renewals", this one answers "how many of them are monthly", which
   // is the question the month-ahead figure is built on.
   next.periods = attribute(prev.periods, period ?? UNKNOWN_PERIOD, share)
+  // And the two of them crossed, for the questions that name both.
+  next.plans = attribute(prev.plans, planKey(period, kind), share)
   buckets[key] = next
   return buckets
 }

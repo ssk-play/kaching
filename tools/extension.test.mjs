@@ -1025,6 +1025,8 @@ test('totals sum a day and a month from the same buckets', () => {
     kinds: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
     // And a third, for how often the money comes back. Nothing said, so '?'.
     periods: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
+    // And the two crossed, which is the row a question naming both reads.
+    plans: { '?:?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
   })
   // Same function answers the month, so the two figures cannot drift apart.
   assert.equal(T.sum(b, '2026-08').amount, 9000)
@@ -1041,6 +1043,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     currencies: { NOK: { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
+    plans: { '?:?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
   })
   // A refund with no charge to take back out is left out of the amount the same
   // way, and disclosed the same way: the message above it printed a figure, so
@@ -1053,6 +1056,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     currencies: { NOK: { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
+    plans: { '?:?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
   })
 })
 
@@ -1066,6 +1070,7 @@ test('a refund comes back out of the running total', () => {
     currencies: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
+    plans: { '?:?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
   })
 })
 
@@ -1085,17 +1090,17 @@ test('a correction moves the amount and leaves the counts alone', () => {
   const day = { '2026-08-19': { currency: 'KRW', amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } }
   const down = T.adjust({}, '2026-08-19', { currency: 'KRW', amount: -6500 })
   // A correction belongs to no buyer, no kind of sale and no billing period, so
-  // it adds nothing to any of the three splits.
+  // it adds nothing to any of the four splits.
   assert.deepEqual(T.sum(down, '2026-08-19'), {
     currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {}, periods: {},
+    currencies: {}, kinds: {}, periods: {}, plans: {},
   })
   // Both directions, and read together with what was announced.
   const up = T.adjust(down, '2026-08-19', { currency: 'KRW', amount: 500 })
   const both = T.combine(T.sum(day, '2026-08-19'), T.sum(up, '2026-08-19'))
   assert.deepEqual(both, {
     currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {}, periods: {},
+    currencies: {}, kinds: {}, periods: {}, plans: {},
   })
   // A correction in another currency is refused rather than added across.
   assert.equal(T.adjust(up, '2026-08-19', { currency: 'USD', amount: 5 }), null)
@@ -1999,6 +2004,114 @@ test('the model is offered the splits, the projection and no writer by default',
   assert.match(ahead.description, /cancellations/)
 })
 
+test('the month ahead is answered as one figure, part fact and part projection', () => {
+  // A month already under way is part charged and part still to come. Reporting
+  // only the projection answers "what will September bring" with the days that
+  // have not happened and silently drops the ones that have — and adding the two
+  // is arithmetic, which is what this tally stopped leaving to the model after
+  // it got eight weeks 5% wrong.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = []
+  const charge = (id, day, amount) => orders.push({
+    id, at: Date.parse(`${day}T04:00:00Z`), state: 'charged', subscription: true,
+    total: { currency: 'KRW', amount }, net: { currency: 'KRW', amount },
+  })
+  // Renewed on the 1st, so it is already counted; due again on the 1st of
+  // October, which is outside the range.
+  charge('GPA.A', '2026-08-01', 5000)
+  charge('GPA.A..0', '2026-09-01', 5000)
+  // Last charged in August, so it is due on the 20th of September — which has
+  // not happened yet and is therefore the projected half.
+  charge('GPA.B', '2026-07-20', 7000)
+  charge('GPA.B..0', '2026-08-20', 7000)
+
+  storage = { payoutCurrency: 'KRW', rates: {}, timeZone: zone }
+  return O.write(orders, zone)
+    .then(() => ledgerTools('2026-09-10').find((x) => x.spec.name === 'read_expected')
+      .run({ from: '2026-09-01', to: '2026-09-30' }))
+    .then((out) => {
+      // The 1st has been charged; the 20th has not. Both are September, and the
+      // answer is the two named apart and added.
+      assert.equal(out.chargedSoFar, 5000)
+      assert.equal(out.stillDue, 7000)
+      assert.equal(out.total, 12000)
+      // Every charge here is a subscription, so both readings agree.
+      assert.equal(out.totalFromSubscriptions, 12000)
+      void fx
+    })
+})
+
+test('a month in progress separates all revenue from subscription revenue', () => {
+  // Both halves come back because both are asked for. Summed into one figure,
+  // "what will September bring" and "what will September's subscriptions bring"
+  // became the same number — and the description told the model to quote it, so
+  // a month of one-off purchases was reported as subscription revenue.
+  const zone = 'UTC'
+  const orders = [
+    // A monthly subscription last charged in August, due on the 20th.
+    { id: 'GPA.S', at: Date.parse('2026-07-20T04:00:00Z'), state: 'charged', subscription: true,
+      total: { currency: 'KRW', amount: 7000 }, net: { currency: 'KRW', amount: 7000 } },
+    { id: 'GPA.S..0', at: Date.parse('2026-08-20T04:00:00Z'), state: 'charged', subscription: true,
+      total: { currency: 'KRW', amount: 7000 }, net: { currency: 'KRW', amount: 7000 } },
+    // And a large one-off purchase early in September.
+    { id: 'GPA.B', at: Date.parse('2026-09-03T04:00:00Z'), state: 'charged',
+      total: { currency: 'KRW', amount: 150000 }, net: { currency: 'KRW', amount: 150000 } },
+  ]
+  storage = { payoutCurrency: 'KRW', rates: {}, timeZone: zone }
+  return O.write(orders, zone)
+    .then(() => ledgerTools('2026-09-10').find((x) => x.spec.name === 'read_expected')
+      .run({ from: '2026-09-01', to: '2026-09-30' }))
+    .then((out) => {
+      assert.equal(out.chargedSoFar, 150000)
+      assert.equal(out.chargedSoFarFromSubscriptions, 0)
+      assert.equal(out.stillDue, 7000)
+      // The month, and the month's subscriptions. 157,000 is a true answer to
+      // one question and a twenty-fold overstatement of the other.
+      assert.equal(out.total, 157000)
+      assert.equal(out.totalFromSubscriptions, 7000)
+    })
+})
+
+test('a correction on an elapsed day is in the month-ahead figure too', () => {
+  // /adjust belongs to no plan, so it is in none of the rows. Left out, this
+  // tool and read_totals answer differently for the very same days.
+  const zone = 'UTC'
+  const orders = [{
+    id: 'GPA.C', at: Date.parse('2026-09-03T04:00:00Z'), state: 'charged',
+    total: { currency: 'KRW', amount: 7000 }, net: { currency: 'KRW', amount: 7000 },
+  }]
+  storage = {
+    payoutCurrency: 'KRW', rates: {}, timeZone: zone,
+    adjustments: T.adjust({}, '2026-09-03', { currency: 'KRW', amount: -3000 }),
+  }
+  return O.write(orders, zone)
+    .then(() => ledgerTools('2026-09-10').find((x) => x.spec.name === 'read_expected')
+      .run({ from: '2026-09-01', to: '2026-09-30' }))
+    .then((out) => assert.equal(out.chargedSoFar, 4000))
+})
+
+test('subscription money with no period is named, not quietly left out', () => {
+  // Seen once, so its period is unknown. Asked for the monthly subscriptions it
+  // is neither in nor out — and told to quote `matched`, a model would report a
+  // figure with an unmeasured pile beside it and no sign the pile is there.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const charge = (id, day, amount) => ({
+    id, at: Date.parse(`${day}T04:00:00Z`), state: 'charged', subscription: true,
+    total: { currency: 'KRW', amount }, net: { currency: 'KRW', amount },
+  })
+  const orders = [
+    charge('GPA.M', '2026-07-05', 6000), charge('GPA.M..0', '2026-08-05', 6000),
+    // One charge only, so no gap to measure.
+    charge('GPA.U', '2026-08-25', 90000),
+  ]
+  const totals = O.foldDays(orders, zone, fx)
+  const out = byKind(totals, {}, { from: '2026-08-01', to: '2026-08-31', period: 'monthly' }, '2026-09-02')
+  assert.equal(out.matched.amount, 6000)
+  assert.deepEqual(out.matched.subscriptionsWithUnknownPeriod, { amount: 90000, orders: 1 })
+})
+
 test('the writing tool is offered only when there is something to run it', () => {
   // The options-page test button asks its question with no recount to give. A
   // tool the model can call and the caller cannot run is worse than one it never
@@ -2066,6 +2179,67 @@ test('a billing period is measured from the run, not read off one order', () => 
 
   // A one-off purchase has no run and no period at all.
   assert.equal(S.periodLookup([{ id: 'GPA.B', at: 0, state: 'charged' }])({ id: 'GPA.B' }), null)
+})
+
+test('a question naming both a period and a kind is answered by one figure', () => {
+  // The failure this exists for. Given a kinds list and a periods list and asked
+  // for "August's new monthly subscriptions", a model took the amount from the
+  // period row and the count from the kind row and welded them together: 38,000
+  // and four orders, where the answer was 18,000 and three. Neither list has a
+  // row for the question, so it built one.
+  const zone = 'UTC'
+  const fx = { currency: 'KRW', rates: {} }
+  const orders = []
+  const at = (day) => Date.parse(`${day}T04:00:00Z`)
+  const charge = (id, day, amount, isSub = true) => orders.push({
+    id, at: at(day), state: 'charged', subscription: isSub,
+    total: { currency: 'KRW', amount }, net: { currency: 'KRW', amount },
+  })
+  // Three monthly subscriptions that started in August, at 6,000.
+  for (let i = 0; i < 3; i += 1) {
+    charge(`GPA.N${i}`, '2026-08-05', 6000)
+    charge(`GPA.N${i}..0`, '2026-09-05', 6000)
+  }
+  // Five monthly renewals in August, at 4,000.
+  for (let i = 0; i < 5; i += 1) {
+    charge(`GPA.R${i}`, '2026-07-10', 4000)
+    charge(`GPA.R${i}..0`, '2026-08-10', 4000)
+  }
+  // A yearly subscription that also started in August, at 90,000 — the order
+  // that makes "new" and "monthly" different questions.
+  charge('GPA.Y0', '2026-08-25', 90000)
+  charge('GPA.Y0..0', '2027-08-25', 90000)
+
+  const totals = O.foldDays(orders, zone, fx)
+  const august = { from: '2026-08-01', to: '2026-08-31' }
+  const all = byKind(totals, {}, august, '2026-09-02')
+
+  // The cross carries the row neither list had.
+  const monthlySub = all.plans.find((r) => r.period === 'monthly' && r.kind === 'sub')
+  assert.equal(monthlySub.amount, 18000)
+  assert.equal(monthlySub.orders, 3)
+
+  // And naming the corner in the call answers it in one figure, so there is no
+  // row to pick wrongly.
+  const asked = byKind(totals, {}, { ...august, period: 'monthly', kind: 'sub' }, '2026-09-02')
+  assert.equal(asked.matched.amount, 18000)
+  assert.equal(asked.matched.orders, 3)
+  // Half a corner is a corner too: every monthly subscription, new or renewing.
+  const monthly = byKind(totals, {}, { ...august, period: 'monthly' }, '2026-09-02')
+  assert.equal(monthly.matched.amount, 38000)
+  assert.equal(monthly.matched.orders, 8)
+  // Which is not the same as every subscription, the figure that came back
+  // before this existed.
+  assert.equal(all.kinds.find((r) => r.kind === 'sub').amount, 108000)
+
+  // The cross still adds back up to the day, like the other three splits.
+  const sumOf = (rows) => rows.reduce((n, r) => n + r.amount, 0)
+  assert.equal(sumOf(all.plans), sumOf(all.kinds))
+  assert.equal(sumOf(all.plans), sumOf(all.periods))
+
+  // A word that names no period or kind is refused rather than filtered to zero.
+  assert.match(byKind(totals, {}, { ...august, period: 'Monthly' }, '2026-09-02').error, /period must be/)
+  assert.match(byKind(totals, {}, { ...august, kind: 'new' }, '2026-09-02').error, /kind must be/)
 })
 
 test('the periods split reaches the model, and adds back up to the days', () => {
