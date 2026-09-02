@@ -264,6 +264,77 @@ export function recentRate(orders, zone, fx, today) {
   return { from: opens, to: closes, days, orders: counted, amount, perDay: amount / days }
 }
 
+// How many subscriptions there are, and how many of them are still running.
+//
+// "Still running" is inferred, because Play does not report cancellations
+// through this API at all — it reports charges. A subscription cancelled an hour
+// after its last renewal is indistinguishable from one that will renew again,
+// right up until the day it does not. So the narrower thing is what this says: a
+// subscription counts as live while it has not yet missed its own next charge by
+// half a period again, which is the very rule `expected` projects on. One rule,
+// used twice, so the count of what is alive and the money it is expected to
+// bill cannot come back disagreeing.
+export function census(orders, zone, today, { period } = {}) {
+  const subs = subscriptions(orders)
+  const rows = new Map()
+  const rowFor = (plan) => {
+    if (!rows.has(plan)) {
+      rows.set(plan, {
+        period: plan,
+        subscriptions: 0, live: 0, lapsed: 0, lastChargeRefunded: 0,
+        measured: 0, inferred: 0,
+      })
+    }
+    return rows.get(plan)
+  }
+
+  for (const sub of subs.values()) {
+    const plan = sub.period
+    if (period && plan !== period) continue
+    const row = rowFor(plan)
+    row.subscriptions += 1
+    // A plan taken from the product rather than measured from this
+    // subscription's own charges. Reported for the same reason `expected`
+    // reports it: on a young account most of the rows lean on it.
+    if (plan !== UNKNOWN_PERIOD) row[sub.measured ? 'measured' : 'inferred'] += 1
+
+    if (daysApartKeys(dayKey(sub.last.at, zone), today) > lapsedAfter(plan)) {
+      row.lapsed += 1
+      continue
+    }
+    // Its most recent charge was handed back. Counted apart rather than as live:
+    // a refund is usually where a subscription ends, and calling it running
+    // would put a payer in the count who has just been made whole. Not called
+    // lapsed either — Play may yet bill it again.
+    if (sub.last.state === 'refunded') {
+      row.lastChargeRefunded += 1
+      continue
+    }
+    row.live += 1
+  }
+
+  const order = [...PERIODS, UNKNOWN_PERIOD]
+  const periods = [...rows.values()].sort(
+    (a, b) => order.indexOf(a.period) - order.indexOf(b.period),
+  )
+  const sum = (field) => periods.reduce((n, r) => n + r[field], 0)
+  return {
+    today,
+    ...(period ? { period } : {}),
+    periods,
+    subscriptions: sum('subscriptions'),
+    live: sum('live'),
+    lapsed: sum('lapsed'),
+    lastChargeRefunded: sum('lastChargeRefunded'),
+    // The row keyed "?" is subscriptions charged once, of a product whose other
+    // subscribers could not settle a plan either. They are in the totals and in
+    // no named period, so a question about monthly plans may be short by them.
+    assumes:
+      'a cancellation is invisible until a charge fails to arrive, so "live" means '
+      + 'not yet overdue, not confirmed active; it is a ceiling',
+  }
+}
+
 export function expected(orders, { from, to, period } = {}, zone, fx, today) {
   const subs = subscriptions(orders)
   const rows = new Map()

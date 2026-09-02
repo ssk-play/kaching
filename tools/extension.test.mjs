@@ -1971,7 +1971,7 @@ test('the model is offered the splits, the projection and no writer by default',
   const tools = ledgerTools('2026-08-25')
   assert.deepEqual(
     tools.map((x) => x.spec.name),
-    ['read_totals', 'read_by_currency', 'read_by_kind', 'read_expected'],
+    ['read_totals', 'read_by_currency', 'read_by_kind', 'read_subscriptions', 'read_expected'],
   )
   const spec = (name) => tools.find((x) => x.spec.name === name).spec
   // Looked up by name rather than by position: a tool inserted in the middle
@@ -3308,4 +3308,139 @@ test('test purchases leave the store on the way out, without a recount', async (
   // A later write does not put them back.
   await O.write([test1], zone)
   assert.deepEqual((await O.readAll(zone)).map((o) => o.id).sort(), ['a', 'd'])
+})
+
+// ------------------------------------------------------- the subscriber census
+
+test('a subscription counts as live until it has actually missed a charge', () => {
+  const today = '2026-09-02'
+  const zone = 'UTC'
+  const at = (d) => Date.parse(`${d}T04:00:00Z`)
+  const charge = (base, n, day, over = {}) => ({
+    id: n == null ? base : `${base}..${n}`,
+    at: at(day), state: 'charged', subscription: true,
+    packageName: 'com.airplaytouch', sku: 'premium_sub',
+    total: { currency: 'KRW', amount: 5000 },
+    net: { currency: 'KRW', amount: 5000 },
+    payout: { currency: 'KRW', amount: 5000 },
+    ...over,
+  })
+
+  const orders = [
+    // Two monthly runs still in their window.
+    charge('M1', null, '2026-07-10'), charge('M1', 0, '2026-08-10'),
+    charge('M2', null, '2026-07-20'), charge('M2', 0, '2026-08-20'),
+    // A monthly subscriber whose last charge was in March: six months idle is
+    // well past a month and a half, so Play would have billed it by now.
+    charge('M3', null, '2026-02-14'), charge('M3', 0, '2026-03-14'),
+    // Charged once. Inherits monthly from the product's other subscribers, and
+    // is live because that inherited plan is not yet overdue.
+    charge('M4', null, '2026-08-28'),
+    // Last charge handed back: neither running nor lapsed.
+    charge('M5', null, '2026-07-05'),
+    charge('M5', 0, '2026-08-05', { state: 'refunded' }),
+    // A yearly product whose only subscriber has not had a year yet, and whose
+    // product cannot vote on a plan either — honestly unknown.
+    charge('Y1', null, '2026-08-01', { sku: 'apt_yearly' }),
+  ]
+
+  const all = S.census(orders, zone, today)
+  assert.equal(all.today, today)
+  assert.equal(all.subscriptions, 6)
+  // Three monthlies still in their window, plus the yearly nobody can place —
+  // which is live for want of anything saying otherwise, and says so in its own
+  // row rather than being folded into a plan it was never measured on.
+  assert.equal(all.live, 4)
+  assert.equal(all.lapsed, 1)
+  assert.equal(all.lastChargeRefunded, 1)
+
+  const monthly = all.periods.find((r) => r.period === 'monthly')
+  assert.deepEqual(monthly, {
+    period: 'monthly',
+    subscriptions: 5, live: 3, lapsed: 1, lastChargeRefunded: 1,
+    // M1, M2, M3 and M5 each have two charges and measured their own gap — a
+    // refunded renewal is still a point in the run that fixes the period. Only
+    // M4, charged once, took the plan from the product.
+    measured: 4, inferred: 1,
+  })
+  // The one nobody can place is its own row and is in the totals, so an answer
+  // about monthly plans can say what it might be short by.
+  assert.deepEqual(all.periods.at(-1), {
+    period: '?',
+    subscriptions: 1, live: 1, lapsed: 0, lastChargeRefunded: 0,
+    measured: 0, inferred: 0,
+  })
+  // Rows come back in the order a reader would list them, unknown last.
+  assert.deepEqual(all.periods.map((r) => r.period), ['monthly', '?'])
+  // A ceiling, and it has to say so: Play reports charges, never cancellations.
+  assert.match(all.assumes, /not yet overdue/)
+
+  // Narrowing drops the row that could not be placed, and the totals with it.
+  const only = S.census(orders, zone, today, { period: 'monthly' })
+  assert.deepEqual(only.periods.map((r) => r.period), ['monthly'])
+  assert.equal(only.subscriptions, 5)
+  assert.equal(only.live, 3)
+  assert.equal(only.period, 'monthly')
+})
+
+test('what is alive and what it will bill are decided by the one rule', () => {
+  // The lapse guard used to live only inside expected(). Two copies of it would
+  // let the count of live subscriptions and the money they are projected to
+  // bill come back disagreeing, which is the one thing a tally must not do.
+  const today = '2026-09-02'
+  const zone = 'UTC'
+  const run = (base, days) => days.map((d, i) => ({
+    id: i === 0 ? base : `${base}..${i - 1}`,
+    at: Date.parse(`${d}T04:00:00Z`), state: 'charged', subscription: true,
+    packageName: 'com.airplaytouch', sku: 'premium_sub',
+    total: { currency: 'KRW', amount: 5000 },
+    net: { currency: 'KRW', amount: 5000 },
+    payout: { currency: 'KRW', amount: 5000 },
+  }))
+  const orders = [
+    ...run('A', ['2026-07-10', '2026-08-10']),
+    ...run('B', ['2026-07-20', '2026-08-20']),
+    ...run('C', ['2026-02-14', '2026-03-14']),
+  ]
+  const fx = { currency: 'KRW', rates: {} }
+  const seen = S.census(orders, zone, today)
+  const due = S.expected(orders, { from: '2026-09-01', to: '2026-09-30' }, zone, fx, today)
+  assert.equal(seen.lapsed, 1)
+  assert.equal(due.subscriptionsLapsed, 1)
+  // Two live monthlies, two charges due, at what they last billed.
+  assert.equal(seen.live, 2)
+  assert.equal(due.periods.find((r) => r.period === 'monthly').subscriptions, 2)
+  assert.equal(due.periods.find((r) => r.period === 'monthly').amount, 10000)
+})
+
+test('read_subscriptions answers in counts and refuses a period it does not sell', async () => {
+  storage = {}
+  const zone = 'UTC'
+  const today = '2026-09-02'
+  const charge = (id, day) => ({
+    id, at: Date.parse(`${day}T04:00:00Z`), state: 'charged', subscription: true,
+    packageName: 'com.airplaytouch', sku: 'premium_sub', product: 'Premium Subscription',
+    total: { currency: 'KRW', amount: 5000 },
+    net: { currency: 'KRW', amount: 5000 },
+    payout: { currency: 'KRW', amount: 5000 },
+  })
+  // Two measured runs before a third can inherit their plan: one is an
+  // anecdote, and plansByProduct refuses to hand a period out on it.
+  await O.write([
+    charge('M1', '2026-07-10'), charge('M1..0', '2026-08-10'),
+    charge('M2', '2026-07-12'), charge('M2..0', '2026-08-12'),
+    charge('M3', '2026-08-15'),
+  ], zone)
+  storage.payoutCurrency = 'KRW'
+  storage.timeZone = zone
+
+  const tool = ledgerTools(today).find((x) => x.spec.name === 'read_subscriptions')
+  const out = await tool.run({ period: 'monthly' })
+  assert.equal(out.subscriptions, 3)
+  assert.equal(out.live, 3)
+  assert.equal(out.periods[0].inferred, 1)
+  // Off-list values are refused rather than filtered on, exactly as the sibling
+  // reads refuse them: an empty answer reads as "there are none", which is a
+  // wrong answer wearing the clothes of a right one.
+  assert.match((await tool.run({ period: 'Monthly' })).error, /period must be one of/)
 })
