@@ -63,6 +63,7 @@ const { totalLine } = await load('format.js')
 const { trim, MAX_ENTRIES } = await load('log.js')
 const { rangeOf, byCurrency, byKind, MAX_ROWS, tools: ledgerTools } = await load('ledger.js')
 const S = await load('subs.js')
+const TESTORDERS = await load('testorders.js')
 const {
   ask, textOf, isQuestion, freshTurns, nextTurns, endpointFor, MAX_TURNS_KEPT, HISTORY_TTL_MS,
   summarize, compacted, RECAP, probe, CARRIES_BOTH, DROPS_TOOLS, DROPS_SYSTEM,
@@ -3205,4 +3206,106 @@ test('a rate limit longer than the worker lives is a failure, not a wait', async
     json: async () => ({ ok: false, description: 'Too Many Requests', parameters: { retry_after: 3600 } }),
   })
   await assert.rejects(tgSend('b', '1', 'hello'), /429/)
+})
+
+// --------------------------------------------------------------- test purchases
+
+// Shaped after what a live Console actually returns: a license tester's order is
+// identical to a real one except for the word in front of the product title.
+const titled = (id, product, over = {}) => ({
+  id, at: Date.parse('2026-08-10T04:00:00Z'), state: 'charged',
+  packageName: 'com.airplaytouch', sku: 'premium', product,
+  total: { currency: 'KRW', amount: 12000 },
+  net: { currency: 'KRW', amount: 10200 },
+  payout: { currency: 'KRW', amount: 10200 },
+  ...over,
+})
+
+test('the test-order prefix is read off the orders, in whatever language it is written', () => {
+  const { learnPrefixes } = TESTORDERS
+  // One product is not enough: a title is editable, and "Bonus: Gold" following
+  // "Gold" is a rename, not a marker.
+  assert.deepEqual(learnPrefixes([
+    titled('a', 'Gold'),
+    titled('b', 'Bonus: Gold'),
+  ]), [])
+
+  // The same words in front of two unrelated products is the Console, not the
+  // developer — and nothing here spells the word out.
+  const orders = [
+    titled('a', 'Premium (AirPlay Touch)'),
+    titled('b', '\uD14C\uC2A4\uD2B8: Premium (AirPlay Touch)'),
+    titled('c', 'Premium Subscription (AirPlay Touch)', { sku: 'premium_sub' }),
+    titled('d', '\uD14C\uC2A4\uD2B8: Premium Subscription (AirPlay Touch)', { sku: 'premium_sub' }),
+  ]
+  assert.deepEqual(learnPrefixes(orders), ['\uD14C\uC2A4\uD2B8: '])
+  // Same shape in English, same answer, no table of languages anywhere.
+  assert.deepEqual(learnPrefixes(orders.map((o) => ({
+    ...o, product: o.product.replace('\uD14C\uC2A4\uD2B8: ', 'Test: '),
+  }))), ['Test: '])
+
+  // "Premium " is a prefix of "Premium Yearly" across two products, and is not a
+  // marker: without the colon it is a longer name, not a label.
+  assert.deepEqual(learnPrefixes([
+    titled('a', 'Premium'), titled('b', 'Premium Yearly'),
+    titled('c', 'Premium', { sku: 'x' }), titled('d', 'Premium Yearly', { sku: 'x' }),
+  ]), [])
+})
+
+test('a prefix learned from one product covers the products that only ever sold to testers', async () => {
+  storage = {}
+  const { learn, withoutTests } = TESTORDERS
+  const orders = [
+    titled('a', 'Premium (AirPlay Touch)'),
+    titled('b', '\uD14C\uC2A4\uD2B8: Premium (AirPlay Touch)'),
+    titled('c', 'Premium Subscription (AirPlay Touch)', { sku: 'premium_sub' }),
+    titled('d', '\uD14C\uC2A4\uD2B8: Premium Subscription (AirPlay Touch)', { sku: 'premium_sub' }),
+    // An app that has never had a paying customer, so its own titles could never
+    // give the marker up on their own.
+    titled('e', '\uD14C\uC2A4\uD2B8: 1,000 credits (GP Chat AI)',
+      { packageName: 'com.sskplay.gpchatai', sku: 'credits' }),
+  ]
+  const prefixes = await learn(orders)
+  assert.deepEqual(prefixes, ['\uD14C\uC2A4\uD2B8: '])
+  assert.deepEqual(withoutTests(orders, prefixes).map((o) => o.id), ['a', 'c'])
+  // Kept, because a two-day poll rarely holds both forms of a title at once.
+  assert.deepEqual(storage.testPrefixes, ['\uD14C\uC2A4\uD2B8: '])
+  // A later batch of nothing but test orders is still read against it.
+  const later = [titled('f', '\uD14C\uC2A4\uD2B8: Premium (AirPlay Touch)')]
+  assert.deepEqual(withoutTests(later, await learn(later)), [])
+})
+
+test('nothing is dropped until the marker has actually been learned', async () => {
+  storage = {}
+  const { learn, withoutTests } = TESTORDERS
+  // Guessing would take real money out of the tally. A tally carrying a test
+  // purchase the reader can see is a test purchase is the cheaper mistake.
+  const orders = [titled('a', 'Premium (AirPlay Touch)')]
+  assert.deepEqual(withoutTests(orders, await learn(orders)).map((o) => o.id), ['a'])
+  assert.equal(storage.testPrefixes, undefined)
+})
+
+test('test purchases leave the store on the way out, without a recount', async () => {
+  storage = {}
+  const zone = 'Asia/Seoul'
+  const real = titled('a', 'Premium (AirPlay Touch)')
+  const test1 = titled('b', '\uD14C\uC2A4\uD2B8: Premium (AirPlay Touch)')
+  const test2 = titled('c', '\uD14C\uC2A4\uD2B8: Premium Subscription (AirPlay Touch)',
+    { sku: 'premium_sub' })
+  const real2 = titled('d', 'Premium Subscription (AirPlay Touch)', { sku: 'premium_sub' })
+  // Written the way an earlier version wrote it: straight into the chunk, marker
+  // and all, before anything knew to look.
+  storage['orders:2026-08'] = [real, test1, test2, real2]
+
+  const read = await O.read('2026-08-01', '2026-08-31', zone)
+  assert.deepEqual(read.map((o) => o.id).sort(), ['a', 'd'])
+  assert.deepEqual((await O.readAll(zone)).map((o) => o.id).sort(), ['a', 'd'])
+  // Still on disk — the reading stopped, nothing was destroyed on a heuristic.
+  assert.equal(storage['orders:2026-08'].length, 4)
+  // And the money follows: two orders at 10,200, not four.
+  assert.equal(T.sum(O.foldDays(read, zone, { currency: 'KRW', rates: {} }), '2026-08-10').orders, 2)
+
+  // A later write does not put them back.
+  await O.write([test1], zone)
+  assert.deepEqual((await O.readAll(zone)).map((o) => o.id).sort(), ['a', 'd'])
 })

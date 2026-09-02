@@ -20,6 +20,7 @@
 import { dayKey, recordInto as tally, MAX_DAYS, PERIOD_NONE } from './totals.js'
 import { estimatedNet, kindOf } from './format.js'
 import { periodLookup } from './subs.js'
+import { learn, withoutTests } from './testorders.js'
 
 // pending is not an event; see background.js. It is not stored either, or a
 // pending order would sit in the tally as a sale that has not happened.
@@ -132,8 +133,14 @@ export async function read(from, to, zone) {
       if (day >= from && day <= to) found.push([key, o])
     }
   }
-  return pick(found, zone)
+  return clean(pick(found, zone))
 }
+
+// What the store holds, minus the test purchases in it — and richer for the
+// prefixes it just picked up on the way past. Reads are what make this
+// retroactive: a store written by an earlier version keeps its test orders on
+// disk and stops counting them, with no /recount asked of anyone.
+const clean = async (kept) => withoutTests(kept, await learn(kept))
 
 // One record per id, across chunks as well as within one. merge() dedupes inside
 // a chunk, which is enough while an order only ever has one home — but the home
@@ -163,11 +170,14 @@ export async function readAll(zone) {
       for (const o of value) found.push([key, o])
     }
   }
-  return pick(found, zone)
+  return clean(pick(found, zone))
 }
 
 // Merged into the months they belong to, and only those months are written back.
 export async function write(incoming, zone) {
+  // Learned from the batch as fetched, then applied to it: a recount hands over
+  // months at a time, which is where both forms of a title turn up together.
+  incoming = withoutTests(incoming, await learn(incoming))
   if (!incoming.length) return []
   const wanted = new Map()
   for (const o of incoming) {

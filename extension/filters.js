@@ -24,8 +24,9 @@ export function matches(order, settings, fx = {}) {
     // sitting in the running total for good. An amount that cannot be brought into
     // the right currency is not muted at all — failing to hush an order is a far
     // cheaper mistake than dropping one out of the running total — except a zero,
-    // which is under every positive minimum in any currency and is the test order
-    // this setting exists for.
+    // which is under every positive minimum in any currency. Test purchases no
+    // longer reach here at all; see testorders.js. A free trial still does, and a
+    // zero is what it is worth.
     if (own ? Math.abs(own.amount) < min : order.total?.amount === 0) return false
   }
 
