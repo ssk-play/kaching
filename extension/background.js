@@ -9,6 +9,7 @@ import {
 import { plan } from './filters.js'
 import { describe, label, totalLine, isSettled, estimatedNet } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
+import { learn as learnTestPrefixes, withoutTests } from './testorders.js'
 import {
   sum as sumTotals, sumRange, shift, trim as trimDays, MAX_DAYS as MAX_BUCKET_DAYS,
   adjust, combine, dayKey, startOf, endOf, monthKey, weekStart, dayOf, periodOf, DAY,
@@ -249,13 +250,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     },
     reset: async () => {
       resetEpoch += 1
-      // Learned rates and the payout currency go too: they describe a developer
-      // account, and a reset is what someone does after pointing this at a
-      // different one. Keeping them would convert the new account's money
-      // through the old account's currency.
+      // Learned rates, the payout currency and the test-order prefix go too:
+      // they describe a developer account, and a reset is what someone does
+      // after pointing this at a different one. Keeping them would convert the
+      // new account's money through the old account's currency, and read its
+      // titles against a word from the old account's Console language.
       await chrome.storage.local.set({
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
         rates: {}, payoutCurrency: null, adjustments: {}, chatTurns: null, sweptOn: null,
+        testPrefixes: [],
         lastDeliveryAt: 0, heldDrift: { moved: 0, by: 0 },
       })
       // The orders themselves, which are the tally. Removed rather than blanked:
@@ -698,7 +701,8 @@ export async function recount(s, arg) {
   const short = []
   // Filled in by the walk: how far back it actually got.
   const reached = {}
-  const all = await ordersOver(s.developerId, zone, from, to, short, reached)
+  const fetched = await ordersOver(s.developerId, zone, from, to, short, reached)
+  const all = withoutTests(fetched, await learnTestPrefixes(fetched))
   const fx = await exchange(all, epoch)
 
   const wanted = all.filter((o) => {
@@ -983,7 +987,12 @@ async function runPoll() {
   return onSuccess(s, orders)
 }
 
-async function onSuccess(s, all) {
+async function onSuccess(s, fetched) {
+  // Test purchases go before anything has looked at them: before the exchange
+  // rates are read off, before the batch is planned, before a single one is
+  // stored. A license tester's order is not money and it is not news, and every
+  // one of those three would otherwise have to remember that separately.
+  const all = withoutTests(fetched, await learnTestPrefixes(fetched))
   const zone = zoneOf(s)
   const st = await state()
   const terminal = all.filter((o) => TERMINAL_STATES.has(o.state))
