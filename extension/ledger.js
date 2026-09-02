@@ -23,7 +23,7 @@ import {
 // offer exactly the same words.
 const KINDS = [KIND_BUY, KIND_SUB, KIND_RENEWAL]
 import { foldDays, readAll } from './orders.js'
-import { expected as expectedFrom, recentRate, PERIODS } from './subs.js'
+import { expected as expectedFrom, census, recentRate, PERIODS } from './subs.js'
 import { load, zoneOf } from './settings.js'
 
 // What a range costs is the rows it emits, not the days it names — so that is
@@ -466,6 +466,39 @@ const RUN_RECOUNT = {
   },
 }
 
+const READ_SUBSCRIPTIONS = {
+  name: 'read_subscriptions',
+  description:
+    'How many subscriptions there are and how many are still running, one row per billing ' +
+    'period. Counts, not money — use it for "how many monthly subscribers", "how many are ' +
+    'still alive", "how many lapsed". For what they will BILL, use read_expected instead. ' +
+    'Fields per row: "period" is one of ' + PERIODS.join(', ') + ' or "' + UNKNOWN_PERIOD +
+    '"; "subscriptions" is every one on record in that period; "live" is those that have not ' +
+    'yet missed a charge; "lapsed" is those long past due, which Play would have billed by ' +
+    'now; "lastChargeRefunded" is those whose most recent charge was handed back, counted in ' +
+    'neither of the other two. The same three totals come back for all periods together. ' +
+    'The row keyed "' + UNKNOWN_PERIOD + '" is subscriptions charged only once, whose plan ' +
+    'could not be worked out — they are in the totals and in no named period, so an answer ' +
+    'about monthly plans may be short by them and you should say so when the row is there. ' +
+    '"inferred" on a row counts subscriptions whose plan was taken from what the same ' +
+    'product\'s other subscribers pay rather than measured from their own charges. ' +
+    'Play does not report cancellations through this data at all, so "live" means not yet ' +
+    'overdue, NOT confirmed active — the "assumes" field says so and you must pass it on in ' +
+    'the same breath as the number.',
+  parameters: {
+    type: 'object',
+    properties: {
+      period: {
+        type: 'string',
+        enum: [...PERIODS],
+        description: 'Only subscriptions billing on this period. Omit for all of them.',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+}
+
 const READ_EXPECTED = {
   name: 'read_expected',
   description:
@@ -633,6 +666,17 @@ export const tools = (today, { recount } = {}) => [
     run: async (input) => {
       const { totals, adjustments } = await stored()
       return byKind(totals, adjustments, input ?? {}, today)
+    },
+  },
+  {
+    spec: READ_SUBSCRIPTIONS,
+    run: async (input) => {
+      const period = input?.period
+      if (period && !PERIODS.includes(period)) {
+        return { error: `period must be one of ${PERIODS.join(', ')}` }
+      }
+      const { orders, zone } = await stored()
+      return census(orders, zone, today, { period })
     },
   },
   {
