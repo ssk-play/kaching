@@ -1028,6 +1028,7 @@ test('totals sum a day and a month from the same buckets', () => {
     periods: { '?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
     // And the two crossed, which is the row a question naming both reads.
     plans: { '?:?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
+    apps: { '?\u001f?:?': { amount: 8000, orders: 2, refunds: 0, refunded: 0, uncounted: 0 } },
   })
   // Same function answers the month, so the two figures cannot drift apart.
   assert.equal(T.sum(b, '2026-08').amount, 9000)
@@ -1045,6 +1046,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     kinds: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
     plans: { '?:?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
+    apps: { '?\u001f?:?': { amount: 0, orders: 1, refunds: 0, refunded: 0, uncounted: 1 } },
   })
   // A refund with no charge to take back out is left out of the amount the same
   // way, and disclosed the same way: the message above it printed a figure, so
@@ -1058,6 +1060,7 @@ test('a total never quietly absorbs money it could not convert', () => {
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
     plans: { '?:?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
+    apps: { '?\u001f?:?': { amount: 0, orders: 1, refunds: 1, refunded: 0, uncounted: 2 } },
   })
 })
 
@@ -1072,6 +1075,7 @@ test('a refund comes back out of the running total', () => {
     kinds: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
     periods: { '?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
     plans: { '?:?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
+    apps: { '?\u001f?:?': { amount: 0, orders: 1, refunds: 1, refunded: -6500, uncounted: 0 } },
   })
 })
 
@@ -1094,14 +1098,14 @@ test('a correction moves the amount and leaves the counts alone', () => {
   // it adds nothing to any of the four splits.
   assert.deepEqual(T.sum(down, '2026-08-19'), {
     currency: 'KRW', amount: -6500, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {}, periods: {}, plans: {},
+    currencies: {}, kinds: {}, periods: {}, plans: {}, apps: {},
   })
   // Both directions, and read together with what was announced.
   const up = T.adjust(down, '2026-08-19', { currency: 'KRW', amount: 500 })
   const both = T.combine(T.sum(day, '2026-08-19'), T.sum(up, '2026-08-19'))
   assert.deepEqual(both, {
     currency: 'KRW', amount: 2000, orders: 2, refunds: 0, refunded: 0, uncounted: 0,
-    currencies: {}, kinds: {}, periods: {}, plans: {},
+    currencies: {}, kinds: {}, periods: {}, plans: {}, apps: {},
   })
   // A correction in another currency is refused rather than added across.
   assert.equal(T.adjust(up, '2026-08-19', { currency: 'USD', amount: 5 }), null)
@@ -1971,7 +1975,10 @@ test('the model is offered the splits, the projection and no writer by default',
   const tools = ledgerTools('2026-08-25')
   assert.deepEqual(
     tools.map((x) => x.spec.name),
-    ['read_totals', 'read_by_currency', 'read_by_kind', 'read_subscriptions', 'read_expected'],
+    [
+      'read_totals', 'read_by_currency', 'read_by_kind', 'read_by_package',
+      'read_subscriptions', 'read_expected',
+    ],
   )
   const spec = (name) => tools.find((x) => x.spec.name === name).spec
   // Looked up by name rather than by position: a tool inserted in the middle
@@ -3443,4 +3450,113 @@ test('read_subscriptions answers in counts and refuses a period it does not sell
   // reads refuse them: an empty answer reads as "there are none", which is a
   // wrong answer wearing the clothes of a right one.
   assert.match((await tool.run({ period: 'Monthly' })).error, /period must be one of/)
+})
+
+// ------------------------------------------------------------ money per app
+
+test('money splits by app, and narrows to one corner without welding', async () => {
+  storage = {}
+  const zone = 'UTC'
+  const today = '2026-09-03'
+  const order = (id, day, amount, over = {}) => ({
+    id, at: Date.parse(`${day}T04:00:00Z`), state: 'charged',
+    packageName: 'com.a', sku: 'premium', product: 'Premium (A)', country: 'KR',
+    total: { currency: 'KRW', amount },
+    net: { currency: 'KRW', amount },
+    payout: { currency: 'KRW', amount },
+    ...over,
+  })
+  const sub = (over) => ({ subscription: true, sku: 'premium_sub', ...over })
+
+  await O.write([
+    // App A: two one-off purchases and a monthly subscription that renewed once.
+    order('a1', '2026-08-02', 3000),
+    order('a2', '2026-08-06', 4000),
+    order('a3', '2026-07-08', 5000, sub({})),
+    order('a3..0', '2026-08-08', 5000, sub({})),
+    // App B: one purchase, and two monthly subscribers who both started in
+    // August — the same month, so their period is inherited, not measured.
+    order('b1', '2026-08-03', 9000, { packageName: 'com.b' }),
+    order('b2', '2026-07-04', 1000, sub({ packageName: 'com.b' })),
+    order('b2..0', '2026-08-04', 1000, sub({ packageName: 'com.b' })),
+    order('b3', '2026-07-09', 1000, sub({ packageName: 'com.b' })),
+    order('b3..0', '2026-08-09', 1000, sub({ packageName: 'com.b' })),
+    order('b4', '2026-08-11', 1000, sub({ packageName: 'com.b' })),
+  ], zone)
+  storage.payoutCurrency = 'KRW'
+  storage.timeZone = zone
+
+  const tool = ledgerTools(today).find((x) => x.spec.name === 'read_by_package')
+  const august = { from: '2026-08-01', to: '2026-08-31' }
+
+  const all = await tool.run(august)
+  assert.deepEqual(all.packages, [
+    { package: 'com.b', amount: 12000, orders: 4 },
+    { package: 'com.a', amount: 12000, orders: 3 },
+  ])
+  // The rows are the same money the plain total is, dealt into piles.
+  const totals = await ledgerTools(today).find((x) => x.spec.name === 'read_totals').run(august)
+  assert.equal(
+    all.packages.reduce((n, r) => n + r.amount, 0),
+    totals.rows.reduce((n, r) => n + r.amount, 0),
+  )
+
+  // One corner of the cross, measured rather than assembled. App B's August
+  // renewals are b2 and b3 at 1,000 each; its new subscription b4 and its 9,000
+  // purchase are a different corner and must not be in this figure.
+  const renewals = await tool.run({ ...august, period: 'monthly', kind: 'renewal' })
+  assert.deepEqual(renewals.filteredBy, { period: 'monthly', kind: 'renewal' })
+  assert.deepEqual(renewals.packages, [
+    { package: 'com.b', amount: 2000, orders: 2 },
+    { package: 'com.a', amount: 5000, orders: 1 },
+  ].sort((x, y) => y.amount - x.amount))
+
+  // App B's new August subscriber inherits monthly from the two measured runs of
+  // the same product, so it is a row rather than a caveat.
+  const fresh = await tool.run({ ...august, period: 'monthly', kind: 'sub' })
+  assert.deepEqual(fresh.packages, [{ package: 'com.b', amount: 1000, orders: 1 }])
+  // App A's subscription was measured too, and its own new charge was in July,
+  // so August has no new subscription for it at all — not a zero row.
+  assert.equal(fresh.packages.some((r) => r.package === 'com.a'), false)
+
+  // Purchases only.
+  const bought = await tool.run({ ...august, kind: 'buy' })
+  assert.deepEqual(bought.packages, [
+    { package: 'com.b', amount: 9000, orders: 1 },
+    { package: 'com.a', amount: 7000, orders: 2 },
+  ])
+
+  // Off-list values are refused rather than filtered on, as everywhere else.
+  assert.match((await tool.run({ kind: 'Renewal' })).error, /kind must be one of/)
+  assert.match((await tool.run({ period: 'Monthly' })).error, /period must be one of/)
+})
+
+test('a per-app answer says what it could not place, and what belongs to no app', async () => {
+  storage = {}
+  const zone = 'UTC'
+  const today = '2026-09-03'
+  const at = (d) => Date.parse(`${d}T04:00:00Z`)
+  await O.write([
+    // Charged once, and the only subscription of its product — nothing can say
+    // how often it bills.
+    {
+      id: 's1', at: at('2026-08-05'), state: 'charged', subscription: true,
+      packageName: 'com.a', sku: 'mystery', product: 'Mystery (A)',
+      total: { currency: 'KRW', amount: 7000 },
+      net: { currency: 'KRW', amount: 7000 },
+      payout: { currency: 'KRW', amount: 7000 },
+    },
+  ], zone)
+  storage.payoutCurrency = 'KRW'
+  storage.timeZone = zone
+  // A hand correction belongs to a day, not to an app.
+  storage.adjustments = { '2026-08-20': { amount: 500, currency: 'KRW', orders: 0 } }
+
+  const tool = ledgerTools(today).find((x) => x.spec.name === 'read_by_package')
+  const out = await tool.run({ from: '2026-08-01', to: '2026-08-31', period: 'monthly' })
+  // In no row, because it might be monthly and nothing here can say so.
+  assert.deepEqual(out.packages, [])
+  assert.deepEqual(out.subscriptionsWithUnknownPeriod, { amount: 7000, orders: 1 })
+  // Named apart, so the rows are not mistaken for the range total.
+  assert.equal(out.corrections, 500)
 })

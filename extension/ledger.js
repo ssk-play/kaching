@@ -15,7 +15,7 @@
 import {
   startedAt, shift, sumRange, combine, weekStart, isDay, UNKNOWN_CURRENCY,
   KIND_BUY, KIND_SUB, KIND_RENEWAL,
-  PERIOD_MONTHLY, PERIOD_NONE, UNKNOWN_PERIOD,
+  PERIOD_MONTHLY, PERIOD_NONE, UNKNOWN_PERIOD, APP_SEPARATOR,
 } from './totals.js'
 
 // The kinds a question may name, in one list for the same reason PERIODS is one:
@@ -466,6 +466,47 @@ const RUN_RECOUNT = {
   },
 }
 
+const READ_BY_PACKAGE = {
+  name: 'read_by_package',
+  description:
+    'Money split by the app it came from, one row per Android package name, for any range. ' +
+    'This is the tool for "which app earns most", "how much did com.example make in August", ' +
+    'or a per-app table. Fields per row: "package" is the package name as Play reports it — ' +
+    'quote it as it is, there is no display name here; "amount" is in "payoutCurrency"; ' +
+    '"orders", "refunds", "refunded" and "uncounted" read as they do in the other splits, ' +
+    'and "uncounted" means the row is short by orders whose currency could not be converted. ' +
+    'Rows are biggest first. ' +
+    'Pass "period" and/or "kind" to narrow every row to one corner — "8월 A앱의 신규 구독" ' +
+    'is period=' + PERIOD_MONTHLY + ' with kind=' + KIND_SUB + ' — and "filteredBy" comes ' +
+    'back saying which corner you got. Do that rather than reading an app row here and a ' +
+    'kind row from read_by_kind and combining them: they are different cuts of the money and ' +
+    'welding them gives an amount from one question and a count from another. ' +
+    'If "subscriptionsWithUnknownPeriod" appears, that is subscription money whose period ' +
+    'could not be worked out — only one charge of it is on record — so it is in no row and ' +
+    'the figures may be short by it. Say so. ' +
+    '"corrections", when present, are hand-entered adjustments; they belong to no app, so the ' +
+    'rows plus that figure is the range total and the rows alone are not.',
+  parameters: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'First day of the range, YYYY-MM-DD. Omit for all time.' },
+      to: { type: 'string', description: 'Last day of the range, YYYY-MM-DD. Omit for all time.' },
+      period: {
+        type: 'string',
+        enum: [...PERIODS, PERIOD_NONE],
+        description: 'Narrow every row to one billing period.',
+      },
+      kind: {
+        type: 'string',
+        enum: [...KINDS],
+        description: 'Narrow every row to one kind of sale.',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+}
+
 const READ_SUBSCRIPTIONS = {
   name: 'read_subscriptions',
   description:
@@ -619,6 +660,72 @@ const READ_BY_KIND = {
   },
 }
 
+// Money per app, and the same money narrowed to one kind of sale or one billing
+// period when the question named those too. Read off the crossed split rather
+// than a plain per-app one, so "8월 A앱 신규 구독 수익" is a corner that was
+// actually measured and not two numbers welded together — the mistake the plans
+// cross exists to stop, which arrives again the moment apps sit beside it.
+export function byPackage(totals, adjustments, range, today) {
+  const { period, kind } = range ?? {}
+  if (period && !PERIODS.includes(period) && period !== PERIOD_NONE) {
+    return { error: `period must be one of ${[...PERIODS, PERIOD_NONE].join(', ')}` }
+  }
+  if (kind && !KINDS.includes(kind)) {
+    return { error: `kind must be one of ${KINDS.join(', ')}` }
+  }
+  const out = splitBy(
+    { field: 'apps', rows: 'packages', row: 'app' }, totals, adjustments, range, today,
+  )
+  if (out.error || !out.packages) return out
+
+  const rows = new Map()
+  // Subscription money whose period could not be worked out, for the same reason
+  // `matching` names its own: asked for the monthly ones it is neither in nor
+  // out, and a per-app table with an unmeasured pile beside it and no sign of
+  // the pile is a table that reads as complete.
+  let unplaced = 0
+  let unplacedOrders = 0
+  for (const { app, ...row } of out.packages) {
+    const cut = String(app).indexOf(APP_SEPARATOR)
+    const name = String(app).slice(0, cut)
+    const [rowPeriod, rowKind] = String(app).slice(cut + 1).split(':')
+    const kindFits = !kind || rowKind === kind
+    if (period && rowPeriod === UNKNOWN_PERIOD && kindFits
+      && (rowKind === KIND_SUB || rowKind === KIND_RENEWAL)) {
+      unplaced += row.amount ?? 0
+      unplacedOrders += row.orders ?? 0
+    }
+    if (period && rowPeriod !== period) continue
+    if (!kindFits) continue
+    const at = rows.get(name)
+      ?? { package: name, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0 }
+    for (const field of ['amount', 'orders', 'refunds', 'refunded', 'uncounted']) {
+      at[field] += row[field] ?? 0
+    }
+    rows.set(name, at)
+  }
+
+  const packages = [...rows.values()]
+    .map(({ refunds, refunded, uncounted, ...row }) => ({
+      ...row,
+      ...(refunds ? { refunds } : {}),
+      ...(refunded ? { refunded } : {}),
+      ...(uncounted ? { uncounted } : {}),
+    }))
+    .sort((a, b) => b.amount - a.amount)
+
+  return {
+    ...out,
+    packages,
+    ...(period || kind
+      ? { filteredBy: { ...(period ? { period } : {}), ...(kind ? { kind } : {}) } }
+      : {}),
+    ...(unplaced || unplacedOrders
+      ? { subscriptionsWithUnknownPeriod: { amount: unplaced, orders: unplacedOrders } }
+      : {}),
+  }
+}
+
 // Folded fresh on every call rather than handed in once. A question may take
 // several turns, and a poll landing an order in the middle of one should be
 // answered from what is in storage now, not from a copy taken before it arrived.
@@ -666,6 +773,13 @@ export const tools = (today, { recount } = {}) => [
     run: async (input) => {
       const { totals, adjustments } = await stored()
       return byKind(totals, adjustments, input ?? {}, today)
+    },
+  },
+  {
+    spec: READ_BY_PACKAGE,
+    run: async (input) => {
+      const { totals, adjustments } = await stored()
+      return byPackage(totals, adjustments, input ?? {}, today)
     },
   },
   {

@@ -200,14 +200,14 @@ export function weekStart(key) {
 
 const empty = () => ({
   currency: null, amount: 0, orders: 0, refunds: 0, refunded: 0, uncounted: 0,
-  currencies: {}, kinds: {}, periods: {}, plans: {},
+  currencies: {}, kinds: {}, periods: {}, plans: {}, apps: {},
 })
 
 // The splits a day is dealt into besides its own total. Named in one place
 // because every fold, every merge and every read has to walk the same list —
 // a third one added to some of them and not the others is a figure that stops
 // adding up to the day it came from.
-const SPLITS = ['currencies', 'kinds', 'periods', 'plans']
+const SPLITS = ['currencies', 'kinds', 'periods', 'plans', 'apps']
 
 // A buyer whose currency Play did not report. Filed under a key rather than
 // dropped, so the split always accounts for every order in the day — and so a
@@ -264,6 +264,24 @@ export const UNKNOWN_PERIOD = '?'
 // exactly one currency and one kind.
 export const planKey = (period, kind) => `${period ?? UNKNOWN_PERIOD}:${kind || UNKNOWN_KIND}`
 
+// An order whose package Play did not report, filed rather than dropped for the
+// same reason as the other unknowns above.
+export const UNKNOWN_PACKAGE = '?'
+
+// Which app the money came from, crossed with the plan it came on — for the
+// same reason `plans` exists at all. Given a plain per-app split beside the kind
+// and period ones, "8월 A앱 구독 수익" is a question none of the three can
+// answer and the model will answer anyway, by taking an amount from the app row
+// and a count from the kind row and welding them. Crossed, the corner asked for
+// is a row that was actually measured.
+//
+// A package name cannot contain a unit separator, and the key is taken apart
+// again on the way out, so a row reads as the three facts it is rather than as a
+// string the reader has to parse.
+export const APP_SEPARATOR = '\u001f'
+export const appKey = (pkg, period, kind) =>
+  `${pkg || UNKNOWN_PACKAGE}${APP_SEPARATOR}${planKey(period, kind)}`
+
 // The same payout-currency figure that went into the day's own amount, only
 // filed under the currency the buyer paid in. Deliberately not a second
 // conversion and not a fresh sign: the split adds back up to the day because it
@@ -292,7 +310,7 @@ function attribute(split, key, { amount, refund, counted }) {
 // The day itself is still rebuilt rather than mutated: it is a handful of fields
 // and two small maps, and the copy is what keeps a bucket already handed out
 // from changing under whoever is holding it.
-export function recordInto(buckets, key, { net, refund, currency, from, kind, period }) {
+export function recordInto(buckets, key, { net, refund, currency, from, kind, period, pkg }) {
   // Merged onto a fresh shape rather than used as-is: a bucket written by an
   // older version is missing fields added since, and += on undefined is NaN.
   const prev = { ...empty(), ...buckets[key] }
@@ -321,6 +339,9 @@ export function recordInto(buckets, key, { net, refund, currency, from, kind, pe
   next.periods = attribute(prev.periods, period ?? UNKNOWN_PERIOD, share)
   // And the two of them crossed, for the questions that name both.
   next.plans = attribute(prev.plans, planKey(period, kind), share)
+  // And which app it was, crossed with that same plan key so a question naming
+  // an app and a kind of sale together has a row of its own.
+  next.apps = attribute(prev.apps, appKey(pkg, period, kind), share)
   buckets[key] = next
   return buckets
 }
