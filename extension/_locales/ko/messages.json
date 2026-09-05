@@ -245,9 +245,6 @@
   "tgRecovered": {
     "message": "카칭 복구됨."
   },
-  "tgSettled": {
-    "message": "Play 정산액이 추정치와 달랐습니다 · $1건, 누계 $2"
-  },
   "tgFailHeader": {
     "message": "카칭이 동작하지 않고 있습니다."
   },
@@ -439,9 +436,6 @@
   },
   "logRecount": {
     "message": "$1 Play 재집계"
-  },
-  "logSettled": {
-    "message": "Play 정산 확정 $1건, 합계 $2"
   },
   "logAnswered": {
     "message": "$1 응답"

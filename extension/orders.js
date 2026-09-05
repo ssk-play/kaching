@@ -77,7 +77,10 @@ export function countInto(buckets, o, zone, fx, periodOf) {
   const paid = estimatedNet(o, fx)
   const kind = kindOf(o)
   const period = periodOf ? periodOf(o) ?? PERIOD_NONE : undefined
-  const share = { net: paid, currency: fx.currency, from: o.net?.currency, kind, period }
+  const share = {
+    net: paid, currency: fx.currency, from: o.net?.currency, kind, period,
+    pkg: o.packageName,
+  }
   if (o.state !== 'refunded') return tally(buckets, day, { ...share, refund: false })
   // Play returns a refunded order once, as the reversal alone. The charge it
   // reverses happened too, and on this same day — a reversal is filed under the

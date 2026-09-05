@@ -100,12 +100,6 @@ function taxable(order) {
 
 const reportedNet = (order) => order.payout ?? order.net
 
-// Whether Play has actually settled the order, or the figure below is this
-// module's own arithmetic on the price the buyer was charged. The caller needs
-// to know which it banked: a guess has to be revisited when Play fills the real
-// number in, and a reported figure does not.
-export const isSettled = (order) => Boolean(reportedNet(order))
-
 // KRW and JPY have no minor unit, so an estimate carried at full precision
 // prints an amount that cannot exist. Reported figures never needed this — Play
 // settles them in whole units already.
