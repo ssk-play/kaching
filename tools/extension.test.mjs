@@ -53,7 +53,7 @@ const {
   deliveryDue, windowStart, anchorMinutes, normalizeAnchor, DELIVERY_PRESETS, HOUR_MS,
 } = await load('settings.js')
 const { matches, plan } = await load('filters.js')
-const { times, describe, feeRate, cycleOf, estimatedNet, isSettled } = await load('format.js')
+const { times, describe, feeRate, cycleOf, estimatedNet } = await load('format.js')
 const { shouldAlert, FAILS_BEFORE_ALERT, ALERT_COOLDOWN_MS } = await load('health.js')
 const { ratesFrom, merge, payoutCurrency, convert, rateFor } = await load('fx.js')
 const T = await load('totals.js')
@@ -2687,17 +2687,20 @@ test('a menu that gained a command reaches installs that already had one', () =>
   }
 })
 
-test('a settled order is told apart from one whose figure is a guess', () => {
-  // The distinction is what makes the store self-correcting: a guess is stored
-  // as the order Play gave, and when Play fills the real figure in, the same
-  // order is stored again and the day is folded from it. Nothing has to remember
-  // that the old figure was a guess, but the line still has to know.
-  const charged = order({ net: null, payout: null, total: { currency: 'KRW', amount: 400 } })
-  assert.equal(isSettled(charged), false)
-  assert.equal(isSettled(order({ payout: { currency: 'KRW', amount: 2500 } })), true)
-  // Play reporting the buyer-currency net but not the payout still counts: that
-  // figure is Play's, not this module's arithmetic on the price.
-  assert.equal(isSettled(order({ payout: null, net: { currency: 'USD', amount: 3 } })), true)
+test('an order line says when the fee behind its figure was assumed', () => {
+  // Play reports no net until it settles, so an unsettled order's figure is this
+  // module's own arithmetic on the price the buyer was charged. The reader is
+  // told which they are looking at by the fee rate: derived from the order, or
+  // the standard rate assumed. Nothing else marks it, and nothing needs to — the
+  // store is self-correcting, because when Play fills the real figure in the
+  // same order is stored again and the day is folded from it.
+  const guess = order({ net: null, payout: null, total: { currency: 'KRW', amount: 400 } })
+  assert.equal(feeRate(guess, { currency: 'KRW', rates: {} }).derived, false)
+  const settled = order({
+    beforeFee: { currency: 'KRW', amount: 4000 },
+    net: { currency: 'KRW', amount: 3400 },
+  })
+  assert.deepEqual(feeRate(settled, { currency: 'KRW', rates: {} }), { percent: 15, derived: true })
 })
 
 const KRW = { currency: 'KRW', rates: { 'USD>KRW': 1300 } }
@@ -3040,10 +3043,11 @@ test('a payout Play settles later moves the day, with nothing re-announced', asy
   // difference by hand. Now the order is stored again and the day is refolded.
   const settled = await pollHarness({ orders: [{ id: 'A', at, total: 400, net: 2500 }] })
   assert.equal(amount(), 2500)
-  // Said once, because a day's figure that jumps with nothing to explain it is
-  // worse than a line nobody needed.
-  assert.equal(settled.sent.length, 1)
-  assert.match(settled.sent[0], /settled 1 order.*\+2160/)
+  // And silently. The correction used to go out as a line of its own, which on
+  // a real account was almost always a few won of rounding and exchange-rate
+  // staleness on a foreign-currency order — noise, arriving minutes behind the
+  // sale it was correcting. The figure fixes itself either way; nobody is told.
+  assert.deepEqual(settled.sent, [])
   storage = {}
 })
 

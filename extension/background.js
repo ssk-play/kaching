@@ -7,7 +7,7 @@ import {
   load, isConfigured, zoneOf, deliveryDue, windowStart, normalizeAnchor, HOUR_MS,
 } from './settings.js'
 import { plan } from './filters.js'
-import { describe, label, totalLine, isSettled, estimatedNet } from './format.js'
+import { describe, label, totalLine } from './format.js'
 import { ratesFrom, merge, payoutCurrency } from './fx.js'
 import { learn as learnTestPrefixes, withoutTests } from './testorders.js'
 import {
@@ -52,32 +52,10 @@ const MAX_SEEN = 5000
 const state = () =>
   chrome.storage.local.get({
     seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0, lastOkAt: 0,
-    // When a batch last actually went out, and what settled while nothing was
-    // going out. Both belong to the delivery pace rather than to a poll.
-    lastDeliveryAt: 0, heldDrift: { moved: 0, by: 0 },
+    // When a batch last actually went out. Belongs to the delivery pace rather
+    // than to a poll.
+    lastDeliveryAt: 0,
   })
-
-// Play reports no net at all until it settles an order, so what a day counts for
-// an unsettled one is an estimate off the price the buyer was charged — right
-// for nearly every order, and wrong for one whose discount Google funds, where
-// the buyer pays 400 and the developer banks 2,500.
-//
-// Nothing re-announces an order Play merely settled, so without this the day
-// would carry the guess for good. It used to take a ledger of what each charge
-// had added, a flag marking which of those were guesses, and a pass that moved
-// the difference into the bucket by hand. Now the order is simply stored again
-// and the day is folded from it — so all that is left to do is say so, because
-// a day's figure that jumps with nothing to explain it is worse than a line
-// nobody needed.
-async function announceDrift(moved, by, settings) {
-  if (!moved || !by) return
-  const signed = `${by > 0 ? '+' : ''}${by}`
-  await record('info', 'logSettled', moved, signed)
-  // Best effort: a notice that did not land must not undo a correction that did.
-  await sendTelegram(
-    settings.botToken, settings.chatId, label(settings, t('tgSettled', moved, signed)),
-  ).catch(() => {})
-}
 
 // Every settled order carries the same money twice — the buyer's currency and
 // the developer's — so the rate between them is learned from orders that have
@@ -259,7 +237,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         seen: [], delivered: [], bootstrapped: false, fails: 0, lastAlertAt: 0,
         rates: {}, payoutCurrency: null, adjustments: {}, chatTurns: null, sweptOn: null,
         testPrefixes: [],
-        lastDeliveryAt: 0, heldDrift: { moved: 0, by: 0 },
+        lastDeliveryAt: 0,
       })
       // The orders themselves, which are the tally. Removed rather than blanked:
       // they are one key per month, and a month with nothing in it should not be
@@ -1050,43 +1028,18 @@ async function onSuccess(s, fetched) {
   // filter hid. A muted order is one the reader chose not to be told about, not
   // one that did not happen.
   //
-  // Over the days this fetch actually reaches, not just today: Play settles an
-  // order days after it was charged, and a window scoped to today would never
-  // see the one case this exists for.
+  // Over the days this fetch actually reaches, not just today: an order that
+  // surfaced late belongs to the day Play stamped it, and the running footer
+  // below folds the store as it stood — which has to include that day.
   const stamped = terminal.map((o) => dayKey(o.at, zone)).sort()
   const spanFrom = stamped[0] && stamped[0] < today ? stamped[0] : today
   const spanTo = stamped.at(-1) > today ? stamped.at(-1) : today
   const kept = await ordersRead(spanFrom, spanTo, zone)
 
-  // Orders Play had not settled when they were last stored and has settled now,
-  // and what those orders alone moved by. Read off the two versions rather than
-  // off the day's total: a run that also announced a new order would otherwise
-  // report that order's money as settlement drift, and the notice would be
-  // wrong on exactly the runs where something did settle.
-  const was = new Map(kept.map((o) => [o.id, o]))
-  let settled = 0
-  let drift = 0
-  for (const o of terminal) {
-    const old = was.get(o.id)
-    if (!old || isSettled(old) || !isSettled(o)) continue
-    const before_ = estimatedNet(old, fx)
-    const after_ = estimatedNet(o, fx)
-    if (!after_ || after_.currency !== fx.currency) continue
-    settled += 1
-    drift += after_.amount - (before_?.currency === fx.currency ? before_.amount : 0)
-  }
-
   // The guard belongs inside the claim: checked when the work is queued, a reset
   // landing while the mutex is held would let this repopulate the very chunks
   // the reset had just removed.
   await claim(() => (epoch === resetEpoch ? ordersWrite(terminal, zone) : null))
-
-  // Drift is read off the difference between what the store held and what this
-  // fetch says, so it is only visible on the one run that writes it. Held back
-  // with the orders it belongs to, it would simply be lost — the next run
-  // compares the store against itself and sees nothing moved. So it accumulates
-  // instead, and goes out with the batch it explains.
-  const pendingDrift = { moved: st.heldDrift.moved + settled, by: st.heldDrift.by + drift }
 
   // Everything above this line happened: the orders are stored and the day is
   // counted. What the pace decides is only whether anyone is told yet.
@@ -1095,7 +1048,7 @@ async function onSuccess(s, fetched) {
   // order longer. That is the queue — there is no second list to keep in step
   // with this one, and a worker that dies mid-hold loses nothing.
   if (!deliveryDue(s, st.lastDeliveryAt)) {
-    await write({ fails: 0, lastOkAt: Date.now(), heldDrift: pendingDrift })
+    await write({ fails: 0, lastOkAt: Date.now() })
     await forgetOldOrders(today)
     // A failure alert is not an order. Someone who paused delivery asked for
     // quiet, not for the one thing this tool exists to prevent: a stopped
@@ -1171,15 +1124,8 @@ async function onSuccess(s, fetched) {
   await write({
     fails: 0,
     lastOkAt: Date.now(),
-    heldDrift: { moved: 0, by: 0 },
     ...(sent ? { lastDeliveryAt: Date.now() } : {}),
   })
-
-  // Said once, after the batch, so it cannot be mistaken for one of the orders
-  // just announced. Carries whatever settled while delivery was held, too —
-  // that money is in the day's figure either way, and the line is what explains
-  // the jump.
-  await announceDrift(pendingDrift.moved, pendingDrift.by, s)
   // Months older than the tally can report on at all.
   await forgetOldOrders(today)
 

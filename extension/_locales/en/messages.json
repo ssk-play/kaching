@@ -245,9 +245,6 @@
   "tgRecovered": {
     "message": "Kaching recovered."
   },
-  "tgSettled": {
-    "message": "Play settled $1 order(s) differently than estimated · total moved $2"
-  },
   "tgFailHeader": {
     "message": "Kaching is not working."
   },
@@ -439,9 +436,6 @@
   },
   "logRecount": {
     "message": "$1 recounted from Play"
-  },
-  "logSettled": {
-    "message": "Play settled $1 order(s) at a different figure, $2 in all"
   },
   "logAnswered": {
     "message": "Answered $1"
